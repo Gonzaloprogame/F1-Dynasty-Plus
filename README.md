@@ -1,5 +1,7 @@
 # Paddock Plus — Gestor de Escudería
 
+▶️ **Jugar:** https://gonzaloprogame.github.io/F1-Dynasty-Plus/
+
 Juego de gestión de una escudería de monoplazas para el navegador, en español. Elige un equipo, ficha pilotos, invierte en I+D, negocia patrocinios, decide la estrategia de cada carrera y construye tu dinastía temporada a temporada.
 
 **Cómo jugar:** abre `index.html` en cualquier navegador; no hace falta instalar nada.
