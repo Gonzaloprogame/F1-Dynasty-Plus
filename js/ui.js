@@ -23,6 +23,14 @@ function toast(msg) {
   el.textContent = msg; el.hidden = false;
   clearTimeout(toast.t); toast.t = setTimeout(() => el.hidden = true, 3500);
 }
+// Confirmación en la propia página (los diálogos del navegador no siempre están disponibles)
+function armed(el, msg) {
+  if (el.dataset.armed) { delete el.dataset.armed; return true; }
+  el.dataset.armed = '1'; el.dataset.label = el.textContent; el.textContent = 'Pulsa otra vez para confirmar';
+  toast(msg);
+  setTimeout(() => { if (el.dataset.armed) { delete el.dataset.armed; el.textContent = el.dataset.label; } }, 4000);
+  return false;
+}
 function go(v) {
   if (live && v !== 'weekend') { live.paused = true; cancelAnimationFrame(live.raf); }
   view = v; render(); window.scrollTo(0, 0);
@@ -254,7 +262,9 @@ const VIEWS = {
     return `<div class="card"><h3>Partida</h3><p class="small muted">La partida se guarda automáticamente en este navegador (plantilla: ${esc(S.rosterName || 'Paddock Plus')}). Si recargas a mitad de una sesión en directo, esa sesión vuelve a empezar.</p>
       <div class="row"><button class="btn ghost" data-act="export">Exportar partida</button>
       <label class="btn ghost">Importar partida<input type="file" accept=".json" id="importFile" hidden></label>
-      <button class="btn" data-act="reset">Nueva partida</button></div></div>`;
+      <button class="btn ghost" data-act="pasteImport">Importar desde texto</button>
+      <button class="btn" data-act="reset">Nueva partida</button></div>
+      <div id="pasteBox" hidden style="margin-top:12px"><textarea id="pasteText" rows="4" style="width:100%" placeholder="Pega aquí la partida exportada"></textarea><button class="btn sm" data-act="pasteLoad">Cargar partida</button></div></div>`;
   },
 
   credits() {
@@ -549,7 +559,7 @@ const ACTIONS = {
     const yrs = parseInt(document.querySelector(`[data-years="${id}"]`).value, 10);
     const e = signDriver(S, id, sal, yrs); toast(e || '¡Fichaje cerrado!'); render();
   },
-  release(el) { if (!confirm('¿Liberar a este piloto? Pagarás la mitad del contrato restante.')) return; const e = releaseDriver(S, el.dataset.id); if (e) toast(e); render(); },
+  release(el) { if (!armed(el, 'Liberar al piloto cuesta la mitad del contrato restante.')) return; const e = releaseDriver(S, el.dataset.id); if (e) toast(e); render(); },
   renew(el) { const e = renewDriver(S, el.dataset.id, 1); toast(e || 'Contrato renovado.'); render(); },
   async rosterUrl() {
     const url = document.getElementById('rosterUrl').value.trim();
@@ -559,15 +569,22 @@ const ACTIONS = {
       const res = await fetch(url);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       useRoster(await res.json(), decodeURIComponent(url.split('/').pop()).replace(/\.json$/i, ''));
-    } catch (err) { toast('No se pudo descargar la plantilla: ' + err.message); }
+    } catch (err) { toast('No se pudo descargar la plantilla (' + err.message + '). Si el enlace está bloqueado, descarga el JSON y usa «Subir archivo».'); }
   },
   rosterDefault() { roster = defaultRoster(); rosterRaw = null; rosterSet = 'base'; render(); },
   export() {
-    const blob = new Blob([JSON.stringify(S)], { type: 'application/json' });
+    const json = JSON.stringify(S);
+    if (navigator.clipboard) navigator.clipboard.writeText(json).then(() => toast('Partida copiada al portapapeles (y descargada si tu navegador lo permite).')).catch(() => {});
+    const blob = new Blob([json], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `paddockplus-${S.season}.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   },
-  reset() { if (!confirm('¿Empezar una partida nueva? Se perderá la actual.')) return; wipe(); S = null; live = null; go('new'); },
+  pasteImport() { document.getElementById('pasteBox').hidden = false; document.getElementById('pasteText').focus(); },
+  pasteLoad() {
+    try { const data = migrate(JSON.parse(document.getElementById('pasteText').value)); if (!data.teams || !data.drivers) throw new Error(); S = data; save(S); live = null; go('hq'); toast('Partida importada.'); }
+    catch (err) { toast('El texto no es una partida válida.'); }
+  },
+  reset(el) { if (!armed(el, 'Se borrará la partida actual de este navegador.')) return; wipe(); S = null; live = null; go('new'); },
 };
 
 document.addEventListener('click', e => {

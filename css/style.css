@@ -4,11 +4,14 @@
   --radius: 10px;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
   --asphalt: #2b2f37; --runoff: #3a414d;
+  color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
-  :root { --bg: #f3f4f7; --panel: #ffffff; --panel2: #eef0f4; --line: #d9dde5; --text: #151922; --muted: #5b6474;
-    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --asphalt: #3b3f47; --runoff: #c9ced8; }
+  :root:not([data-theme="dark"]) { --bg: #f3f4f7; --panel: #ffffff; --panel2: #eef0f4; --line: #d9dde5; --text: #151922; --muted: #5b6474;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --asphalt: #3b3f47; --runoff: #c9ced8; color-scheme: light; }
 }
+:root[data-theme="light"] { --bg: #f3f4f7; --panel: #ffffff; --panel2: #eef0f4; --line: #d9dde5; --text: #151922; --muted: #5b6474;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --asphalt: #3b3f47; --runoff: #c9ced8; color-scheme: light; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 a { color: var(--accent); }
@@ -35,7 +38,7 @@ h2 { font-size: 20px; } h3 { font-size: 16px; }
 .btn.ghost { background: var(--panel2); color: var(--text); border: 1px solid var(--line); }
 .btn.sm { padding: 5px 10px; font-size: 13px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
-select, input { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
+select, input, textarea { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }

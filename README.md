@@ -4,7 +4,9 @@ Juego de gestión de una escudería de monoplazas para el navegador, en español
 
 **Cómo jugar:** abre `index.html` en cualquier navegador; no hace falta instalar nada.
 
-**Jugar online (GitHub Pages):** el flujo `.github/workflows/pages.yml` publica el juego automáticamente en cada push. Para activarlo una vez: *Settings → Pages → Build and deployment → Source: GitHub Actions*. El juego queda en `https://gonzaloprogame.github.io/F1-Dynasty-Plus/`. En un repositorio privado, Pages requiere un plan de pago de GitHub; en uno público es gratis. La partida se guarda automáticamente en el navegador y se puede exportar o importar como JSON.
+**Jugar online:** hay una versión publicada en https://claude.ai/artifact/4F8nA6bSP6E8c14Np7rhP2 (privada hasta que se comparta desde su menú *Share*).
+
+**GitHub Pages:** el flujo `.github/workflows/pages.yml` publica el juego automáticamente en cada push. Para activarlo una vez: *Settings → Pages → Build and deployment → Source: GitHub Actions*. El juego queda en `https://gonzaloprogame.github.io/F1-Dynasty-Plus/`. En un repositorio privado, Pages requiere un plan de pago de GitHub; en uno público es gratis. La partida se guarda automáticamente en el navegador y se puede exportar o importar como JSON.
 
 ## Características
 - **Carrera en directo:** circuito 2D con los coches en movimiento, torre de tiempos, radio y comentarios. Se puede ver a 1×, 2×, 4× u 8×, pausar o saltar al final.
