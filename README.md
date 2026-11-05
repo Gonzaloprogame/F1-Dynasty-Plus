@@ -14,14 +14,25 @@ Juego de gestión de una escudería de monoplazas para el navegador, en español
 - Pretemporada: envejecimiento y evolución de los pilotos, retiradas, novatos, mercado de fichajes y renovaciones, y cambio de reglamento cada 4 años.
 - Palmarés histórico y estadísticas de carrera.
 
+## Plantillas de la comunidad (formato F1 Dynasty)
+En la pantalla de nueva partida puedes cargar una plantilla en el formato JSON que exporta el editor de F1 Dynasty, desde un archivo o desde una URL. Por ejemplo:
+
+```
+https://raw.githubusercontent.com/RuleImpossible3362/F1DynastyRosters/refs/heads/main/F1%20DYNASTY%202026%20ROSTER.json
+```
+
+Se importan los equipos (con sus estadísticas de coche y motor adaptadas al motor de Paddock Plus), los pilotos titulares (de la plantilla base o de cualquier temporada 2020–2026 incluida en el archivo), los reservas, los agentes libres, las promesas, el calendario y los patrocinadores. Las plantillas **no se incluyen en este repositorio**: pertenecen a sus autores y se descargan en el navegador del jugador.
+
 ## Estructura
 - `index.html`: página principal.
 - `css/style.css`: estilos (tema claro u oscuro según el sistema; adaptado a móvil).
 - `js/data.js`: equipos, pilotos y circuitos (todos ficticios).
 - `js/engine.js`: simulación, economía, mercado y guardado.
+- `js/roster.js`: importador de plantillas externas (formato F1 Dynasty).
 - `js/ui.js`: interfaz.
 
 ## Créditos
 - **Inspiración:** [F1 Dynasty](https://f1dynasty.com/), un gestor de escuderías para el navegador. Gracias a su creador por la idea.
 - F1 Dynasty no publica su código bajo una licencia abierta, así que **este proyecto no contiene código, textos, arte ni datos de F1 Dynasty**. Es una implementación original del mismo género, escrita desde cero.
-- No está afiliado a Formula One Group, la FIA ni ninguna escudería. "Formula 1" y "F1" son marcas de sus respectivos propietarios. Los equipos, pilotos y patrocinadores de este juego son ficticios.
+- **Plantillas:** compatibilidad con las plantillas de la comunidad de F1 Dynasty, como [RuleImpossible3362/F1DynastyRosters](https://github.com/RuleImpossible3362/F1DynastyRosters). Los datos de esas plantillas son de sus autores.
+- No está afiliado a Formula One Group, la FIA ni ninguna escudería. "Formula 1" y "F1" son marcas de sus respectivos propietarios. Los equipos, pilotos y patrocinadores de la plantilla por defecto son ficticios; los nombres reales que aparezcan en plantillas importadas proceden de esos archivos externos.

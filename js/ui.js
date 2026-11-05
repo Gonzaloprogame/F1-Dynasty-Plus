@@ -4,6 +4,20 @@
 let S = load();
 let view = S ? 'hq' : 'new';
 let replay = null; // { race, lap, timer }
+let roster = defaultRoster();      // plantilla elegida para la próxima partida
+let rosterRaw = null, rosterLabel = '', rosterSet = 'base';
+const EXAMPLE_ROSTER_URL = 'https://raw.githubusercontent.com/RuleImpossible3362/F1DynastyRosters/refs/heads/main/F1%20DYNASTY%202026%20ROSTER.json';
+
+function useRoster(raw, label) {
+  try {
+    const years = rosterYears(raw);
+    const set = years.includes(rosterSet) ? rosterSet : (years.length ? years[years.length - 1] : 'base');
+    roster = convertExternalRoster(raw, set, label);
+    rosterRaw = raw; rosterLabel = label; rosterSet = set;
+    toast(`Plantilla cargada: ${roster.teams.length} equipos, ${roster.drivers.length} pilotos, ${roster.calendar.length} carreras.`);
+  } catch (err) { toast('No se pudo leer la plantilla: ' + err.message); }
+  render();
+}
 
 const $app = document.getElementById('app');
 const esc = x => String(x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -33,14 +47,23 @@ function renderChrome() {
 // ---------- vistas ----------
 const VIEWS = {
   new() {
+    const years = rosterRaw ? rosterYears(rosterRaw) : [];
     return `<div class="card hero"><h1>Elige tu escudería</h1>
       <p class="muted">Dirige un equipo durante temporadas: ficha pilotos, invierte en I+D, gestiona patrocinadores y decide la estrategia de cada carrera. Los equipos punteros lo tienen más fácil; los modestos, más mérito.</p></div>
-      <div class="grid" style="margin-top:14px">${TEAMS.map(t => {
-        const ds = DRIVERS.filter(d => d.teamId === t.id).map(d => esc(d.name)).join(' · ');
+      <div class="card" style="margin-top:14px"><div class="row spread"><h3>Plantilla: ${esc(roster.name)}</h3>
+        ${rosterRaw ? '<button class="btn sm ghost" data-act="rosterDefault">Volver a la ficticia</button>' : ''}</div>
+        ${years.length ? `<div class="row small" style="margin-bottom:8px">Pilotos: <select id="rosterSet"><option value="base" ${rosterSet === 'base' ? 'selected' : ''}>Plantilla base</option>${years.map(y => `<option value="${y}" ${rosterSet === y ? 'selected' : ''}>Temporada ${y}</option>`).join('')}</select></div>` : ''}
+        <p class="small muted">Puedes cargar una plantilla en formato JSON del editor de F1 Dynasty (por ejemplo, las de la comunidad), ya sea un archivo o una URL. Se importan los equipos, los pilotos, los reservas, los agentes libres, el calendario y los patrocinadores. Las plantillas pertenecen a sus autores y no se incluyen en Paddock Plus.</p>
+        <div class="row"><input id="rosterUrl" type="url" placeholder="URL del JSON" value="${esc(EXAMPLE_ROSTER_URL)}" style="flex:1;min-width:200px">
+          <button class="btn sm" data-act="rosterUrl">Cargar URL</button>
+          <label class="btn sm ghost">Subir archivo<input type="file" accept=".json,application/json" id="rosterFile" hidden></label></div>
+      </div>
+      <div class="grid" style="margin-top:14px">${roster.teams.map(t => {
+        const ds = roster.drivers.filter(d => d.teamId === t.id).map(d => esc(d.name)).join(' · ');
         return `<div class="card teampick" style="--c:${t.color}" data-act="pickTeam" data-id="${t.id}">
           <h3>${esc(t.name)}</h3>
           <div class="small muted">${ds}</div>
-          <div class="row small" style="margin-top:8px"><span>Coche <b>${carRating(t.car)}</b></span><span>Presupuesto <b>${t.budget} M€</b></span><span>Prestigio <b>${t.rep}</b></span></div>
+          <div class="row small" style="margin-top:8px"><span>Coche <b>${carRating(t.car)}</b></span><span>Presupuesto <b>${Math.round(t.budget)} M€</b></span><span>Prestigio <b>${t.rep}</b></span></div>
         </div>`;
       }).join('')}</div>`;
   },
@@ -86,7 +109,7 @@ const VIEWS = {
           <tr><td>Probabilidad de lluvia</td><td class="num">${r1(c.rain * 100)}%</td></tr>
           <tr><td>Coche de seguridad</td><td class="num">${r1(c.sc * 100)}%</td></tr>
         </table>
-        <p class="small">Tu coche en este trazado: <b>${ordinal(myRank)}</b> de 10.</p>
+        <p class="small">Tu coche en este trazado: <b>${ordinal(myRank)}</b> de ${S.teams.length}.</p>
       </div>
       <div class="card"><h3>Estrategia</h3>
         ${mine.map(d => {
@@ -193,6 +216,7 @@ const VIEWS = {
       <p><b>Paddock Plus</b> es un juego original de gestión de escuderías. El género y la idea de un gestor de dinastías en el navegador están inspirados en
       <a href="https://f1dynasty.com/" target="_blank" rel="noopener">F1 Dynasty</a>. Muchas gracias a su creador por la inspiración.</p>
       <p>F1 Dynasty no publica su código bajo ninguna licencia abierta, así que este proyecto <b>no copia su código, sus textos, su arte ni sus datos</b>: todo se ha escrito desde cero.</p>
+      <p>El importador de plantillas lee el formato JSON del editor de F1 Dynasty para que puedas usar las plantillas de la comunidad, como las de <a href="https://github.com/RuleImpossible3362/F1DynastyRosters" target="_blank" rel="noopener">RuleImpossible3362/F1DynastyRosters</a>. Esas plantillas pertenecen a sus autores, se descargan en tu navegador y no forman parte de este proyecto.</p>
       <p>No está afiliado a Formula One Group, la FIA ni ninguna escudería. "Formula 1" y "F1" son marcas de sus respectivos propietarios. Los equipos, pilotos y patrocinadores son ficticios.</p>
       <button class="btn ghost" data-go="${S ? 'hq' : 'new'}">Volver</button></div>`;
   },
@@ -241,7 +265,7 @@ function playReplay() {
 
 // ---------- acciones ----------
 const ACTIONS = {
-  pickTeam(el) { S = newGame(el.dataset.id); save(S); go('finance'); toast('Elige un patrocinador principal para empezar.'); },
+  pickTeam(el) { S = newGame(el.dataset.id, roster); save(S); go('finance'); toast('Elige un patrocinador principal para empezar.'); },
   simulate() {
     if (!S.sponsor) { toast('Elige antes un patrocinador principal (pestaña Finanzas).'); return go('finance'); }
     const race = simulateWeekend(S);
@@ -265,6 +289,17 @@ const ACTIONS = {
   },
   release(el) { if (!confirm('¿Liberar a este piloto? Pagarás la mitad del contrato restante.')) return; const e = releaseDriver(S, el.dataset.id); if (e) toast(e); render(); },
   renew(el) { const e = renewDriver(S, el.dataset.id, 1); toast(e || 'Contrato renovado.'); render(); },
+  async rosterUrl() {
+    const url = document.getElementById('rosterUrl').value.trim();
+    if (!/^https?:\/\//.test(url)) return toast('Introduce una URL válida.');
+    toast('Descargando plantilla…');
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      useRoster(await res.json(), decodeURIComponent(url.split('/').pop()).replace(/\.json$/i, ''));
+    } catch (err) { toast('No se pudo descargar la plantilla: ' + err.message); }
+  },
+  rosterDefault() { roster = defaultRoster(); rosterRaw = null; rosterSet = 'base'; render(); },
   export() {
     const blob = new Blob([JSON.stringify(S)], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `paddockplus-${S.season}.json`; a.click();
@@ -282,6 +317,11 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => {
   const t = e.target;
   if (t.dataset.strat) { S.strategy[t.dataset.strat][t.dataset.k] = t.value; save(S); }
+  if (t.id === 'rosterSet') { rosterSet = t.value; roster = convertExternalRoster(rosterRaw, rosterSet, rosterLabel); render(); }
+  if (t.id === 'rosterFile' && t.files[0]) {
+    const f = t.files[0];
+    f.text().then(txt => { try { useRoster(JSON.parse(txt), f.name.replace(/\.json$/i, '')); } catch (err) { toast('El archivo no es un JSON válido.'); } });
+  }
   if (t.id === 'importFile' && t.files[0]) {
     t.files[0].text().then(txt => {
       try { const data = JSON.parse(txt); if (!data.teams || !data.drivers) throw new Error(); S = data; save(S); replay = null; go('hq'); toast('Partida importada.'); }

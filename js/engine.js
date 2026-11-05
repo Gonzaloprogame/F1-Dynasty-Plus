@@ -34,15 +34,17 @@ const fmtM = n => (n < 0 ? '-' : '') + Math.abs(n).toFixed(1) + ' M€';
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
 // ---------- creación de partida ----------
-function newGame(teamId) {
+function newGame(teamId, roster = defaultRoster()) {
   const s = {
-    version: 1, season: 2027, round: 0, teamId, phase: 'season',
-    teams: deepCopy(TEAMS).map(t => ({ ...t, facility: 1, points: 0, history: [] })),
-    drivers: deepCopy(DRIVERS),
-    calendar: deepCopy(CIRCUITS),
+    version: 1, season: roster.startSeason || 2027, round: 0, teamId, phase: 'season', rosterName: roster.name,
+    teams: deepCopy(roster.teams).map(t => ({ ...t, facility: 1, points: 0, history: [] })),
+    drivers: deepCopy(roster.drivers),
+    calendar: deepCopy(roster.calendar), baseCalendar: deepCopy(roster.calendar),
+    sponsorNames: [...roster.sponsors], points: [...roster.points],
     raceResults: [], rd: [], ledger: [], news: [], history: [], sponsor: null, sponsorOffers: [],
-    strategy: {}, nextDriverId: DRIVERS.length, lastRace: null,
+    strategy: {}, nextDriverId: roster.drivers.length, lastRace: null,
   };
+  s.regsBase = s.season - 1;
   const me = team(s, teamId);
   s.money = me.budget * 0.35; // caja disponible tras costes fijos
   s.sponsorOffers = makeSponsorOffers(s);
@@ -60,7 +62,7 @@ function ledger(s, label, amount) { s.money += amount; s.ledger.unshift({ season
 
 function boardTarget(s) {
   const sorted = [...s.teams].sort((a, b) => b.rep - a.rep);
-  return clamp(sorted.findIndex(t => t.id === s.teamId) + 1, 1, 10);
+  return clamp(sorted.findIndex(t => t.id === s.teamId) + 1, 1, s.teams.length);
 }
 
 function driverRating(d) { return Math.round(d.pace * 0.6 + d.craft * 0.25 + d.cons * 0.15); }
@@ -77,7 +79,7 @@ function carScore(t, c) {
   return (k.aero * c.df + k.power * c.pw + k.chassis) / (c.df + c.pw + 1);
 }
 function driverScore(d, wet) {
-  return wet ? d.pace * 0.45 + d.craft * 0.2 + d.cons * 0.35 : d.pace * 0.6 + d.craft * 0.25 + d.cons * 0.15;
+  return wet ? (d.wet ?? d.pace) * 0.45 + d.craft * 0.2 + d.cons * 0.35 : d.pace * 0.6 + d.craft * 0.25 + d.cons * 0.15;
 }
 function perf(s, d, c, wet) { return 0.62 * carScore(team(s, d.teamId), c) + 0.38 * driverScore(d, wet); }
 
@@ -192,7 +194,7 @@ function simulateWeekend(s) {
   const leadT = byId[order[0]].t;
   const results = order.map((id, i) => {
     const x = byId[id];
-    const pts = !x.out && i < 10 ? POINTS[i] : 0;
+    const pts = !x.out ? (pointsTable(s)[i] || 0) : 0;
     return { id, teamId: x.teamId, pos: i + 1, grid: x.grid, gap: x.out ? null : x.t - leadT, out: x.out, outLap: x.outLap, reason: x.outReason, pts, pits: x.pits, total: x.t, fl: fl && fl.id === id };
   });
   if (fl) events.push({ lap: c.laps, type: 'info', text: `⏱️ Vuelta rápida: ${fl.d.name} (${fmtLap(fl.best)}).` });
@@ -201,6 +203,7 @@ function simulateWeekend(s) {
   return { circuit: c.name, round: s.round, season: s.season, wet, qualy: qTimes, laps, events, results, totalLaps: c.laps };
 }
 
+function pointsTable(s) { return s.points || POINTS; }
 function fmtLap(t) { const m = Math.floor(t / 60); return m + ':' + (t - m * 60).toFixed(3).padStart(6, '0'); }
 
 // ---------- aplicar resultados ----------
@@ -297,7 +300,7 @@ function teamStandings(s) { return [...s.teams].sort((a, b) => b.points - a.poin
 // ---------- patrocinio ----------
 function makeSponsorOffers(s) {
   const rep = myTeam(s).rep;
-  const names = shuffle([...SPONSOR_NAMES]).slice(0, 3);
+  const names = shuffle([...(s.sponsorNames || SPONSOR_NAMES)]).slice(0, 3);
   const kinds = [
     { tag: 'Seguro', mult: 0.85, target: 0, bonus: 0 },
     { tag: 'Equilibrado', mult: 0.7, target: -1, bonus: 10 },
@@ -307,7 +310,7 @@ function makeSponsorOffers(s) {
   return kinds.map((k, i) => ({
     name: names[i], tag: k.tag,
     perRace: Math.round((0.6 + rep / 60) * k.mult * 10) / 10,
-    target: clamp(tgt + k.target, 1, 10),
+    target: clamp(tgt + k.target, 1, s.teams.length),
     bonus: Math.round(k.bonus * (0.5 + rep / 100)),
   }));
 }
@@ -321,7 +324,7 @@ function endSeason(s) {
   const myPos = ts.findIndex(t => t.id === s.teamId) + 1;
   s.history.push({ season: s.season, driver: champ.name, driverTeam: team(s, champ.teamId).name, team: champTeam.name, myPos, myPts: myTeam(s).points });
 
-  ledger(s, `Premio de constructores (${ordinal(myPos)})`, 70 - (myPos - 1) * 6);
+  ledger(s, `Premio de constructores (${ordinal(myPos)})`, Math.max(8, 70 - (myPos - 1) * 6));
   if (s.sponsor && s.sponsor.bonus && myPos <= s.sponsor.target) ledger(s, `Bonus de ${s.sponsor.name} (objetivo cumplido)`, s.sponsor.bonus);
   const target = boardTarget(s);
   const verdict = myPos <= target ? 'El consejo está satisfecho con la temporada.' : 'El consejo esperaba más. Mejora el próximo año.';
@@ -329,15 +332,15 @@ function endSeason(s) {
 
   // Reputación y presupuestos
   ts.forEach((t, i) => {
-    const expected = 10 - Math.round(t.rep / 10);
+    const expected = s.teams.length - Math.round(t.rep / 100 * s.teams.length);
     t.rep = clamp(t.rep + (expected - i) * 1.5, 20, 99);
-    t.budget = clamp(t.budget * 0.85 + (70 - i * 6) * 0.3 + t.rep * 0.15, 45, 170);
+    t.budget = clamp(t.budget * 0.85 + Math.max(8, 70 - i * 6) * 0.3 + t.rep * 0.15, 45, 170);
     t.history.push({ season: s.season, pos: i + 1, pts: t.points });
     t.points = 0;
   });
 
   // Coches: regresión hacia la media, cambio de reglamento cada 4 años
-  const regs = (s.season - 2026) % 4 === 0;
+  const regs = (s.season - (s.regsBase ?? 2026)) % 4 === 0;
   s.teams.forEach(t => {
     for (const k of Object.keys(t.car)) {
       const keep = regs ? 0.45 : 0.75;
@@ -380,7 +383,7 @@ function endSeason(s) {
   s.phase = 'offseason';
   s.sponsor = null;
   s.sponsorOffers = makeSponsorOffers(s);
-  s.calendar = deepCopy(CIRCUITS);
+  s.calendar = deepCopy(s.baseCalendar || CIRCUITS);
   save(s);
 }
 
