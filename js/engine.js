@@ -1,22 +1,21 @@
-// Motor del juego: simulación de carreras, desarrollo, economía y mercado.
+// Motor de gestión: partida, fin de semana, desarrollo, personal, economía y mercado.
 'use strict';
 
 const SAVE_KEY = 'paddockplus_save_v1';
+const SAVE_VERSION = 2;
+const COST_CAP = 60; // M€ por temporada en I+D, fábrica y entrenamiento
 const PILLARS = { aero: 'Aerodinámica', power: 'Unidad de potencia', chassis: 'Chasis', rel: 'Fiabilidad' };
-const STRATS = {
-  '1': { label: '1 parada', stints: [0.5] },
-  '2': { label: '2 paradas', stints: [0.33, 0.66] },
-};
-const AGGR = {
-  cons: { label: 'Conservador', pace: 0.15, deg: 0.8, risk: 0.6 },
-  norm: { label: 'Equilibrado', pace: 0, deg: 1, risk: 1 },
-  aggr: { label: 'Agresivo', pace: -0.2, deg: 1.3, risk: 1.7 },
-};
 const RD_SIZES = {
   small:  { label: 'Pequeño', cost: 4,  races: 1, min: 0.6, max: 1.4 },
   medium: { label: 'Mediano', cost: 9,  races: 2, min: 1.5, max: 3.0 },
   big:    { label: 'Grande',  cost: 16, races: 3, min: 3.0, max: 5.5 },
 };
+const STAFF_ROLES = {
+  td: { label: 'Director técnico', desc: 'Multiplica las mejoras de I+D y reduce la pérdida de rendimiento en invierno.' },
+  re: { label: 'Ingeniero de carrera', desc: 'Da más ritmo a tus pilotos y más precisión en los reglajes de prácticas.' },
+  pc: { label: 'Jefe de mecánicos', desc: 'Paradas más rápidas y mejor fiabilidad.' },
+};
+const SETUP_KEYS = { wing: 'Ala delantera/trasera', susp: 'Rigidez de suspensión', height: 'Altura de carrocería' };
 
 // ---------- utilidades ----------
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -32,23 +31,57 @@ function gauss(sd = 1) {
 const deepCopy = o => JSON.parse(JSON.stringify(o));
 const fmtM = n => (n < 0 ? '-' : '') + Math.abs(n).toFixed(1) + ' M€';
 const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const ordinal = n => n + 'º';
+function fmtLap(t) { const m = Math.floor(t / 60); return m + ':' + (t - m * 60).toFixed(3).padStart(6, '0'); }
 
 // ---------- creación de partida ----------
+function customizeRoster(roster, custom) {
+  // Sustituye al equipo con menos prestigio por el equipo creado por el jugador.
+  const r = deepCopy(roster);
+  const weakest = [...r.teams].sort((a, b) => a.rep - b.rep)[0];
+  const id = 'custom';
+  Object.assign(weakest, {
+    name: custom.name, short: (custom.short || custom.name).slice(0, 3).toUpperCase(), color: custom.color,
+    rep: Math.max(weakest.rep, 40), budget: Math.max(weakest.budget, 80),
+  });
+  r.drivers.forEach(d => { if (d.teamId === weakest.id) d.teamId = id; });
+  weakest.id = id;
+  return { roster: r, teamId: id };
+}
+
 function newGame(teamId, roster = defaultRoster()) {
   const s = {
-    version: 1, season: roster.startSeason || 2027, round: 0, teamId, phase: 'season', rosterName: roster.name,
+    version: SAVE_VERSION, season: roster.startSeason || 2027, round: 0, teamId, phase: 'season', rosterName: roster.name,
     teams: deepCopy(roster.teams).map(t => ({ ...t, facility: 1, points: 0, history: [] })),
-    drivers: deepCopy(roster.drivers),
+    drivers: deepCopy(roster.drivers).map(d => ({ ...d, morale: 65 })),
     calendar: deepCopy(roster.calendar), baseCalendar: deepCopy(roster.calendar),
     sponsorNames: [...roster.sponsors], points: [...roster.points],
     raceResults: [], rd: [], ledger: [], news: [], history: [], sponsor: null, sponsorOffers: [],
-    strategy: {}, nextDriverId: roster.drivers.length, lastRace: null,
+    nextDriverId: roster.drivers.length, weekend: null, capSpent: 0, staffMarket: {},
   };
   s.regsBase = s.season - 1;
   const me = team(s, teamId);
-  s.money = me.budget * 0.35; // caja disponible tras costes fijos
+  s.staff = Object.fromEntries(Object.keys(STAFF_ROLES).map(k => [k, makeStaff(k, 58 + me.rep * 0.3)]));
+  s.staffMarket = makeStaffMarket(s);
+  s.money = me.budget * 0.35;
   s.sponsorOffers = makeSponsorOffers(s);
   addNews(s, `Bienvenido a ${me.name}. El consejo espera terminar ${ordinal(boardTarget(s))} o mejor.`);
+  return s;
+}
+
+// Adapta partidas guardadas con versiones anteriores.
+function migrate(s) {
+  if (!s) return s;
+  if ((s.version || 1) < 2) {
+    s.drivers.forEach(d => { if (d.morale === undefined) d.morale = 65; });
+    s.staff = s.staff || Object.fromEntries(Object.keys(STAFF_ROLES).map(k => [k, makeStaff(k, 58 + myTeam(s).rep * 0.3)]));
+    s.staffMarket = makeStaffMarket(s);
+    s.capSpent = s.capSpent || 0;
+    s.weekend = null;
+    s.baseCalendar = s.baseCalendar || deepCopy(CIRCUITS);
+    s.raceResults.forEach((r, i) => { r.round = r.round ?? i; r.kind = r.kind || 'race'; });
+    s.version = 2;
+  }
   return s;
 }
 
@@ -56,9 +89,9 @@ const team = (s, id) => s.teams.find(t => t.id === id);
 const driver = (s, id) => s.drivers.find(d => d.id === id);
 const teamDrivers = (s, id) => s.drivers.filter(d => d.teamId === id);
 const myTeam = s => team(s, s.teamId);
-const ordinal = n => n + 'º';
-function addNews(s, text) { s.news.unshift({ season: s.season, round: s.round, text }); s.news = s.news.slice(0, 40); }
-function ledger(s, label, amount) { s.money += amount; s.ledger.unshift({ season: s.season, round: s.round, label, amount }); s.ledger = s.ledger.slice(0, 80); }
+function addNews(s, text) { s.news.unshift({ season: s.season, round: s.round, text }); s.news = s.news.slice(0, 50); }
+function ledger(s, label, amount) { s.money += amount; s.ledger.unshift({ season: s.season, round: s.round, label, amount }); s.ledger = s.ledger.slice(0, 100); }
+function pointsTable(s) { return s.points || POINTS; }
 
 function boardTarget(s) {
   const sorted = [...s.teams].sort((a, b) => b.rep - a.rep);
@@ -83,219 +116,208 @@ function driverScore(d, wet) {
 }
 function perf(s, d, c, wet) { return 0.62 * carScore(team(s, d.teamId), c) + 0.38 * driverScore(d, wet); }
 
-function aiStrategy(c) {
-  const stops = c.wear >= 1.15 ? (Math.random() < 0.7 ? '2' : '1') : (Math.random() < 0.8 ? '1' : '2');
-  const r = Math.random();
-  return { stops, aggr: r < 0.2 ? 'cons' : r < 0.85 ? 'norm' : 'aggr' };
-}
-
-// ---------- simulación de un fin de semana ----------
-function simulateWeekend(s) {
+// ---------- fin de semana ----------
+// Fases: practice → (sprint) → qualy → race
+function startWeekend(s) {
   const c = s.calendar[s.round];
-  const wet = Math.random() < c.rain;
-  const grid = s.drivers.filter(d => d.teamId);
-  const cars = grid.map(d => {
-    const strat = d.teamId === s.teamId ? (s.strategy[d.id] || { stops: '1', aggr: 'norm' }) : aiStrategy(c);
-    return { id: d.id, teamId: d.teamId, p: perf(s, d, c, wet), d, strat, t: 0, tyre: 0, out: false, outLap: 0, outReason: '', best: Infinity, pits: 0 };
-  });
-
-  // Clasificación
-  cars.forEach(x => { x.q = x.p + gauss((wet ? 1.6 : 0.8) * (1.15 - x.d.cons / 100) * 2) ; });
-  const qOrder = [...cars].sort((a, b) => b.q - a.q);
-  const qTimes = qOrder.map((x, i) => ({ id: x.id, time: c.base - (x.q - 70) * 0.075 + (wet ? 8 : 0) - 1.2 }));
-  qOrder.forEach((x, i) => { x.grid = i + 1; x.t = i * 0.25; });
-
-  // Plan de paradas y averías
-  cars.forEach(x => {
-    x.pitLaps = STRATS[x.strat.stops].stints.map(f => clamp(Math.round(c.laps * f + randInt(-3, 3)), 3, c.laps - 3));
-    const ag = AGGR[x.strat.aggr];
-    const rel = team(s, x.teamId).car.rel;
-    const mech = 0.02 + Math.max(0, 100 - rel) * 0.003;
-    const crash = (0.008 + (100 - x.d.cons) * 0.0009) * ag.risk * (wet ? 2.2 : 1);
-    if (Math.random() < mech) { x.failLap = randInt(1, c.laps); x.failReason = pick(['Motor', 'Caja de cambios', 'Hidráulica', 'Frenos', 'Sistema eléctrico']); }
-    else if (Math.random() < crash) { x.failLap = randInt(1, c.laps); x.failReason = 'Accidente'; }
-  });
-
-  const events = [];
-  const laps = [];
-  let order = qOrder.map(x => x.id);
-  const byId = Object.fromEntries(cars.map(x => [x.id, x]));
-  let scLaps = 0;
-  const scLap = Math.random() < c.sc ? randInt(2, c.laps - 6) : -1;
-  if (wet) events.push({ lap: 0, type: 'info', text: '🌧️ Carrera en mojado: la consistencia será clave.' });
-  events.push({ lap: 0, type: 'info', text: `Pole para ${qOrder[0].d.name} (${team(s, qOrder[0].teamId).name}).` });
-
-  for (let lap = 1; lap <= c.laps; lap++) {
-    const scActive = scLaps > 0;
-    const lapTimes = {};
-    for (const x of cars) {
-      if (x.out) continue;
-      const ag = AGGR[x.strat.aggr];
-      x.tyre++;
-      const deg = 0.045 * c.wear * ag.deg * x.tyre + (x.tyre > 30 / c.wear ? 0.08 * (x.tyre - 30 / c.wear) : 0);
-      let lt = c.base - (x.p - 70) * 0.058 + ag.pace + deg - lap * 0.025 + gauss(0.18 + (100 - x.d.cons) * 0.012) * (wet ? 1.8 : 1);
-      if (wet) lt += 8;
-      if (lap === 1) lt += 2 + gauss(0.5 * (1.1 - x.d.craft / 100) * 3);
-      x.pitted = false;
-      const nextPit = x.pitLaps[x.pits];
-      if (nextPit !== undefined && (lap >= nextPit || (scActive && lap >= nextPit - 6))) {
-        const crew = team(s, x.teamId).crew;
-        let stop = (scActive ? 11 : 21) + Math.max(0, gauss(0.6)) + (100 - crew) * 0.03;
-        if (Math.random() < 0.04 * (1.3 - crew / 100) * 3) { stop += rand(3, 8); events.push({ lap, type: 'warn', text: `Parada lenta para ${x.d.name}.` }); }
-        lt += stop; x.tyre = 0; x.pits++; x.pitted = true;
-      }
-      if (!x.pitted && !scActive) x.best = Math.min(x.best, lt);
-      lapTimes[x.id] = lt;
-      if (x.failLap === lap) {
-        x.out = true; x.outLap = lap; x.outReason = x.failReason;
-        events.push({ lap, type: 'dnf', text: `❌ Abandono de ${x.d.name}: ${x.failReason.toLowerCase()}.` });
-        if (x.failReason === 'Accidente' && scLap < 0 && scLaps === 0 && Math.random() < 0.7 && lap < c.laps - 3) scLaps = 4, events.push({ lap, type: 'sc', text: '🟡 Coche de seguridad en pista.' });
-      }
-    }
-    if (lap === scLap && scLaps === 0) { scLaps = 4; events.push({ lap, type: 'sc', text: '🟡 Coche de seguridad por restos en la pista.' }); }
-
-    // Avance y adelantamientos
-    const active = order.filter(id => !byId[id].out);
-    const newOrder = [];
-    for (const id of active) {
-      const x = byId[id];
-      x.t += lapTimes[id];
-      let pos = newOrder.length;
-      while (pos > 0) {
-        const ahead = byId[newOrder[pos - 1]];
-        if (x.t >= ahead.t) break;
-        const free = ahead.pitted && !x.pitted || ahead.t - x.t > 1.5;
-        let ok = free;
-        if (!ok && !scActive) {
-          const pr = clamp(0.15 + c.ovt * 0.45 + (ahead.t - x.t) * 0.4 + (x.d.craft - ahead.d.craft) / 60, 0.05, 0.92);
-          ok = Math.random() < pr;
-        }
-        if (ok) {
-          pos--;
-          if (pos === 0 && !free) events.push({ lap, type: 'lead', text: `🏁 ${x.d.name} pasa a liderar.` });
-        } else { x.t = ahead.t + 0.3 + Math.random() * 0.2; break; }
-      }
-      newOrder.splice(pos, 0, id);
-    }
-    if (scActive) {
-      const lead = byId[newOrder[0]].t;
-      newOrder.forEach((id, i) => { byId[id].t = lead + i * 0.6; });
-      scLaps--;
-      if (scLaps === 0) events.push({ lap, type: 'sc', text: '🟢 Bandera verde, se reanuda la carrera.' });
-    }
-    const outs = order.filter(id => byId[id].out);
-    order = [...newOrder, ...outs.sort((a, b) => byId[b].outLap - byId[a].outLap)];
-    const leadT = byId[order[0]].t;
-    laps.push(order.map(id => ({ id, gap: byId[id].out ? null : byId[id].t - leadT, out: byId[id].out })));
-  }
-
-  // Resultados
-  const fl = cars.filter(x => !x.out).sort((a, b) => a.best - b.best)[0];
-  const leadT = byId[order[0]].t;
-  const results = order.map((id, i) => {
-    const x = byId[id];
-    const pts = !x.out ? (pointsTable(s)[i] || 0) : 0;
-    return { id, teamId: x.teamId, pos: i + 1, grid: x.grid, gap: x.out ? null : x.t - leadT, out: x.out, outLap: x.outLap, reason: x.outReason, pts, pits: x.pits, total: x.t, fl: fl && fl.id === id };
-  });
-  if (fl) events.push({ lap: c.laps, type: 'info', text: `⏱️ Vuelta rápida: ${fl.d.name} (${fmtLap(fl.best)}).` });
-  events.push({ lap: c.laps, type: 'lead', text: `🏆 ¡${byId[order[0]].d.name} gana el ${c.name}!` });
-
-  return { circuit: c.name, round: s.round, season: s.season, wet, qualy: qTimes, laps, events, results, totalLaps: c.laps };
+  const setups = {};
+  s.teams.forEach(t => { if (t.id !== s.teamId) setups[t.id] = Math.round(rand(55, 92)); });
+  const target = { wing: clamp(Math.round(15 + c.df * 50 + rand(-8, 8)), 5, 95), susp: randInt(15, 85), height: randInt(15, 85) };
+  s.weekend = {
+    round: s.round, stage: 'practice', target, runsLeft: staffRating(s, 're') >= 85 ? 5 : 4, runs: [], setups,
+    weather: makeWeather(c, c.laps), sprint: !!c.sprint,
+  };
+  save(s);
+  return s.weekend;
 }
 
-function pointsTable(s) { return s.points || POINTS; }
-function fmtLap(t) { const m = Math.floor(t / 60); return m + ':' + (t - m * 60).toFixed(3).padStart(6, '0'); }
-
-// ---------- aplicar resultados ----------
-function applyRace(s, race) {
-  for (const r of race.results) {
+function setupFeedback(s, vals) {
+  const wk = s.weekend, precise = staffRating(s, 're') >= 85;
+  const fb = {};
+  let total = 0;
+  for (const k of Object.keys(SETUP_KEYS)) {
+    const diff = vals[k] - wk.target[k];
+    const a = Math.abs(diff);
+    total += a;
+    const dir = diff > 0 ? 'alto' : 'bajo';
+    fb[k] = a <= 4 ? { txt: '¡Perfecto!', cls: 'good' } : a <= 12 ? { txt: `Un poco ${dir}`, cls: 'warn' } : a <= 25 ? { txt: `Demasiado ${dir}`, cls: 'bad' } : { txt: `Muy ${dir}`, cls: 'bad' };
+    if (precise && a > 4) fb[k].txt += ` (≈${Math.ceil(a / 5) * 5})`;
+  }
+  return { fb, quality: Math.round(clamp(100 - (total / 3) * 2.2, 0, 100)) };
+}
+function practiceRun(s, vals) {
+  const wk = s.weekend;
+  if (wk.runsLeft <= 0) return null;
+  const r = setupFeedback(s, vals);
+  wk.runsLeft--;
+  wk.runs.push({ vals: { ...vals }, ...r });
+  wk.best = Math.max(wk.best || 0, r.quality);
+  save(s);
+  return r;
+}
+function finishPractice(s) {
+  const wk = s.weekend;
+  wk.setups[s.teamId] = wk.best ?? Math.round(rand(45, 60));
+  wk.stage = wk.sprint ? 'sprint' : 'qualy';
+  save(s);
+}
+function applySession(s, results, kind) {
+  for (const r of results) {
     const d = driver(s, r.id);
-    d.starts++;
     d.seasonPts = (d.seasonPts || 0) + r.pts;
-    if (r.pos === 1 && !r.out) d.wins++;
-    if (r.pos <= 3 && !r.out) d.podiums++;
     team(s, r.teamId).points += r.pts;
   }
-  s.raceResults.push({ circuit: race.circuit, wet: race.wet, results: race.results.map(r => ({ id: r.id, teamId: r.teamId, pos: r.pos, pts: r.pts, out: r.out })) });
+  s.raceResults.push({ round: s.round, kind, circuit: s.calendar[s.round].name, results: results.map(r => ({ id: r.id, teamId: r.teamId, pos: r.pos, pts: r.pts, out: r.out })) });
+}
+function finishSprint(s, results) {
+  applySession(s, results, 'sprint');
+  const myPts = results.filter(r => r.teamId === s.teamId).reduce((a, r) => a + r.pts, 0);
+  if (myPts) ledger(s, `Premio por puntos en el sprint (${myPts} pts)`, myPts * 0.08);
+  s.weekend.stage = 'qualy';
+  save(s);
+}
+function runQualifying(s) {
+  const wk = s.weekend;
+  wk.qualy = simulateQualifying(s, s.calendar[s.round], wk.weather.w[0], wk.setups);
+  save(s);
+  return wk.qualy;
+}
 
-  // Economía del jugador
+function finishRace(s, results, wet) {
+  const c = s.calendar[s.round];
+  for (const r of results) {
+    const d = driver(s, r.id);
+    d.starts++;
+    if (r.pos === 1 && !r.out) d.wins++;
+    if (r.pos <= 3 && !r.out) d.podiums++;
+  }
+  applySession(s, results, 'race');
+  s.raceResults[s.raceResults.length - 1].wet = wet;
+
+  // Moral de los pilotos
+  results.forEach(r => {
+    const d = driver(s, r.id);
+    let delta = (65 - d.morale) * 0.1;
+    if (r.out) delta -= r.reason === 'Accidente' ? 3 : 6;
+    else if (r.pos === 1) delta += 12; else if (r.pos <= 3) delta += 8; else if (r.pts) delta += 3; else delta -= 2;
+    const mate = results.find(x => x.teamId === r.teamId && x.id !== r.id);
+    if (mate && !r.out && !mate.out) delta += r.pos < mate.pos ? 2 : -2;
+    d.morale = clamp(d.morale + delta, 5, 100);
+  });
+
+  // Economía
   const me = myTeam(s);
-  const myPts = race.results.filter(r => r.teamId === s.teamId).reduce((a, r) => a + r.pts, 0);
-  const ops = 2.2;
+  const myPts = results.filter(r => r.teamId === s.teamId).reduce((a, r) => a + r.pts, 0);
   const salaries = teamDrivers(s, s.teamId).reduce((a, d) => a + d.salary, 0) / s.calendar.length;
-  ledger(s, `Costes operativos (${race.circuit})`, -ops);
+  const staffSal = Object.values(s.staff).reduce((a, x) => a + x.salary, 0) / s.calendar.length;
+  ledger(s, `Costes operativos (${c.name})`, -2.2);
   ledger(s, 'Salarios de pilotos', -salaries);
+  ledger(s, 'Salarios del personal técnico', -staffSal);
   if (s.sponsor) ledger(s, `Patrocinio: ${s.sponsor.name}`, s.sponsor.perRace);
-  ledger(s, 'Ingresos comerciales base', 1 + me.budget * 0.012);
+  ledger(s, 'Ingresos comerciales', 1 + me.budget * 0.012);
   if (myPts) ledger(s, `Premio por puntos (${myPts} pts)`, myPts * 0.12);
-  const myBest = race.results.find(r => r.teamId === s.teamId);
-  if (myBest && myBest.pos === 1) addNews(s, `¡Victoria para ${driver(s, myBest.id).name} en el ${race.circuit}!`);
-  else if (myBest && myBest.pos <= 3) addNews(s, `Podio para ${driver(s, myBest.id).name} en el ${race.circuit}.`);
-  race.results.filter(r => r.teamId === s.teamId && r.out).forEach(r => addNews(s, `${driver(s, r.id).name} abandonó en el ${race.circuit} (${r.reason.toLowerCase()}).`));
+  const myBest = results.find(r => r.teamId === s.teamId);
+  if (myBest && myBest.pos === 1 && !myBest.out) addNews(s, `🏆 ¡Victoria para ${driver(s, myBest.id).name} en el ${c.name}!`);
+  else if (myBest && myBest.pos <= 3 && !myBest.out) addNews(s, `🍾 Podio para ${driver(s, myBest.id).name} en el ${c.name}.`);
+  results.filter(r => r.teamId === s.teamId && r.out).forEach(r => addNews(s, `${driver(s, r.id).name} abandonó en el ${c.name} (${r.reason.toLowerCase()}).`));
 
-  // Proyectos de I+D
+  // I+D del jugador
   const done = [];
   s.rd.forEach(p => { p.left--; if (p.left <= 0) done.push(p); });
   s.rd = s.rd.filter(p => p.left > 0);
+  const tdMult = 0.75 + (staffRating(s, 'td') - 60) / 80;
   done.forEach(p => {
-    const t = myTeam(s);
     const sz = RD_SIZES[p.size];
-    const diminish = clamp(1 - (t.car[p.pillar] - 70) / 45, 0.2, 1.2);
-    const gain = rand(sz.min, sz.max) * diminish * (0.9 + t.facility * 0.1);
-    t.car[p.pillar] = Math.min(99, t.car[p.pillar] + gain);
-    addNews(s, `🔧 Mejora de ${PILLARS[p.pillar].toLowerCase()} lista: +${gain.toFixed(1)}.`);
+    const diminish = clamp(1 - (me.car[p.pillar] - 70) / 45, 0.2, 1.2);
+    const fail = Math.random() < 0.08;
+    const gain = fail ? 0 : rand(sz.min, sz.max) * diminish * (0.9 + me.facility * 0.1) * tdMult;
+    me.car[p.pillar] = Math.min(99, me.car[p.pillar] + gain);
+    addNews(s, fail ? `🧪 El proyecto de ${PILLARS[p.pillar].toLowerCase()} no ha dado resultado en el túnel de viento.` : `🔧 Mejora de ${PILLARS[p.pillar].toLowerCase()} lista: +${gain.toFixed(1)}.`);
   });
-
   // Desarrollo de la IA
   s.teams.forEach(t => {
     if (t.id === s.teamId) return;
     const pillar = pick(Object.keys(PILLARS));
-    const gain = rand(0, 1.3) * (t.budget / 110) * clamp(1 - (t.car[pillar] - 70) / 45, 0.2, 1.2);
-    t.car[pillar] = Math.min(99, t.car[pillar] + gain);
+    t.car[pillar] = Math.min(99, t.car[pillar] + rand(0, 1.3) * (t.budget / 110) * clamp(1 - (t.car[pillar] - 70) / 45, 0.2, 1.2));
   });
 
-  s.lastRace = race;
+  s.weekend = null;
   s.round++;
   if (s.round >= s.calendar.length) s.phase = 'seasonEnd';
   save(s);
 }
 
-// ---------- I+D ----------
+// ---------- I+D y límite de gasto ----------
+function capLeft(s) { return COST_CAP - (s.capSpent || 0); }
+function spend(s, label, cost) {
+  if (s.money < cost) return 'Fondos insuficientes.';
+  if (capLeft(s) < cost) return `Superarías el límite de gasto (quedan ${fmtM(capLeft(s))} esta temporada).`;
+  ledger(s, label, -cost); s.capSpent = (s.capSpent || 0) + cost;
+  return null;
+}
 function startRD(s, pillar, size) {
   const sz = RD_SIZES[size];
   if (s.rd.length >= 2) return 'Solo puedes tener 2 proyectos en curso.';
   if (s.rd.some(p => p.pillar === pillar)) return 'Ya hay un proyecto en esa área.';
-  if (s.money < sz.cost) return 'Fondos insuficientes.';
-  ledger(s, `I+D: ${PILLARS[pillar]} (${sz.label.toLowerCase()})`, -sz.cost);
+  const e = spend(s, `I+D: ${PILLARS[pillar]} (${sz.label.toLowerCase()})`, sz.cost);
+  if (e) return e;
   s.rd.push({ pillar, size, left: sz.races });
-  save(s);
-  return null;
+  save(s); return null;
 }
 function facilityCost(s) { return 20 + myTeam(s).facility * 12; }
 function upgradeFacility(s) {
-  const cost = facilityCost(s);
   if (myTeam(s).facility >= 5) return 'Las instalaciones ya están al máximo.';
-  if (s.money < cost) return 'Fondos insuficientes.';
-  ledger(s, `Ampliación de la fábrica (nivel ${myTeam(s).facility + 1})`, -cost);
+  const e = spend(s, `Ampliación de la fábrica (nivel ${myTeam(s).facility + 1})`, facilityCost(s));
+  if (e) return e;
   myTeam(s).facility++;
   save(s); return null;
 }
 function trainCrew(s) {
   const t = myTeam(s);
   if (t.crew >= 98) return 'El equipo de boxes ya es de élite.';
-  if (s.money < 5) return 'Fondos insuficientes.';
-  ledger(s, 'Entrenamiento del equipo de boxes', -5);
+  const e = spend(s, 'Entrenamiento del equipo de boxes', 5);
+  if (e) return e;
   t.crew = Math.min(98, t.crew + rand(1.5, 3.5));
+  save(s); return null;
+}
+
+// ---------- personal ----------
+function makeStaff(role, level) {
+  const rating = Math.round(clamp(level + gauss(5), 55, 97));
+  return { role, name: pick(FIRST_NAMES) + ' ' + pick(LAST_NAMES), nat: pick(NATS), rating, salary: Math.round((0.6 + Math.pow(Math.max(0, rating - 55), 1.6) * 0.03) * 10) / 10 };
+}
+function makeStaffMarket(s) {
+  return Object.fromEntries(Object.keys(STAFF_ROLES).map(k => [k, Array.from({ length: 4 }, () => makeStaff(k, randInt(62, 92))).sort((a, b) => b.rating - a.rating)]));
+}
+function hireStaff(s, role, i) {
+  const c = s.staffMarket[role][i];
+  const fee = Math.round(c.salary * 0.5 * 10) / 10;
+  const severance = Math.round(s.staff[role].salary * 0.5 * 10) / 10;
+  if (s.money < fee + severance) return `Necesitas ${fmtM(fee + severance)} (prima de fichaje + despido).`;
+  ledger(s, `Fichaje de ${c.name} (${STAFF_ROLES[role].label.toLowerCase()})`, -fee);
+  ledger(s, `Despido de ${s.staff[role].name}`, -severance);
+  addNews(s, `🧑‍🔧 ${c.name} es el nuevo ${STAFF_ROLES[role].label.toLowerCase()} (valoración ${c.rating}).`);
+  s.staffMarket[role].splice(i, 1, makeStaff(role, randInt(60, 88)));
+  s.staffMarket[role].sort((a, b) => b.rating - a.rating);
+  s.staff[role] = c;
   save(s); return null;
 }
 
 // ---------- clasificaciones ----------
 function driverStandings(s) {
   return s.drivers.filter(d => d.seasonPts !== undefined || d.teamId)
-    .map(d => ({ d, pts: d.seasonPts || 0, wins: s.raceResults.filter(r => r.results.some(x => x.id === d.id && x.pos === 1)).length }))
+    .map(d => ({ d, pts: d.seasonPts || 0, wins: s.raceResults.filter(r => r.kind !== 'sprint' && r.results.some(x => x.id === d.id && x.pos === 1 && !x.out)).length }))
     .sort((a, b) => b.pts - a.pts || b.wins - a.wins);
 }
 function teamStandings(s) { return [...s.teams].sort((a, b) => b.points - a.points); }
+function pointsProgression(s, ids) {
+  const rounds = [...new Set(s.raceResults.map(r => r.round))].sort((a, b) => a - b);
+  const series = ids.map(id => {
+    let acc = 0;
+    return { id, values: rounds.map(i => { s.raceResults.filter(r => r.round === i).forEach(r => { const x = r.results.find(y => y.id === id); if (x) acc += x.pts; }); return acc; }) };
+  });
+  return { rounds, series };
+}
 
 // ---------- patrocinio ----------
 function makeSponsorOffers(s) {
@@ -314,7 +336,7 @@ function makeSponsorOffers(s) {
     bonus: Math.round(k.bonus * (0.5 + rep / 100)),
   }));
 }
-function chooseSponsor(s, i) { s.sponsor = s.sponsorOffers[i]; s.sponsorOffers = []; addNews(s, `Nuevo patrocinador principal: ${s.sponsor.name}.`); save(s); }
+function chooseSponsor(s, i) { s.sponsor = s.sponsorOffers[i]; s.sponsorOffers = []; addNews(s, `🤝 Nuevo patrocinador principal: ${s.sponsor.name}.`); save(s); }
 
 // ---------- final de temporada y pretemporada ----------
 function endSeason(s) {
@@ -322,15 +344,13 @@ function endSeason(s) {
   const champ = ds[0].d, champTeam = ts[0];
   champ.titles++;
   const myPos = ts.findIndex(t => t.id === s.teamId) + 1;
-  s.history.push({ season: s.season, driver: champ.name, driverTeam: team(s, champ.teamId).name, team: champTeam.name, myPos, myPts: myTeam(s).points });
+  s.history.push({ season: s.season, driver: champ.name, driverTeam: team(s, champ.teamId)?.name || '—', team: champTeam.name, myPos, myPts: myTeam(s).points });
 
   ledger(s, `Premio de constructores (${ordinal(myPos)})`, Math.max(8, 70 - (myPos - 1) * 6));
   if (s.sponsor && s.sponsor.bonus && myPos <= s.sponsor.target) ledger(s, `Bonus de ${s.sponsor.name} (objetivo cumplido)`, s.sponsor.bonus);
-  const target = boardTarget(s);
-  const verdict = myPos <= target ? 'El consejo está satisfecho con la temporada.' : 'El consejo esperaba más. Mejora el próximo año.';
-  addNews(s, `Fin de temporada ${s.season}: ${champ.name} campeón; ${champTeam.name} gana el título de constructores. Tu equipo: ${ordinal(myPos)}. ${verdict}`);
+  const verdict = myPos <= boardTarget(s) ? 'El consejo está satisfecho con la temporada.' : 'El consejo esperaba más. Mejora el próximo año.';
+  addNews(s, `🏁 Fin de temporada ${s.season}: ${champ.name} campeón; ${champTeam.name} gana el título de constructores. Tu equipo: ${ordinal(myPos)}. ${verdict}`);
 
-  // Reputación y presupuestos
   ts.forEach((t, i) => {
     const expected = s.teams.length - Math.round(t.rep / 100 * s.teams.length);
     t.rep = clamp(t.rep + (expected - i) * 1.5, 20, 99);
@@ -341,17 +361,18 @@ function endSeason(s) {
 
   // Coches: regresión hacia la media, cambio de reglamento cada 4 años
   const regs = (s.season - (s.regsBase ?? 2026)) % 4 === 0;
+  const tdKeep = (staffRating(s, 'td') - 75) * 0.004;
   s.teams.forEach(t => {
     for (const k of Object.keys(t.car)) {
-      const keep = regs ? 0.45 : 0.75;
+      const keep = (regs ? 0.45 : 0.75) + (t.id === s.teamId ? tdKeep : 0);
       t.car[k] = 72 + (t.car[k] - 72) * keep + (t.budget - 100) * 0.05 + rand(-1.5, 1.5);
       if (regs) t.car[k] += gauss(2.5);
     }
   });
   if (regs) addNews(s, '📜 Nuevo reglamento técnico: el orden competitivo puede cambiar por completo.');
   s.rd = [];
+  s.capSpent = 0;
 
-  // Pilotos: edad, evolución, contratos, retiros
   s.drivers.forEach(d => {
     d.age++;
     d.seasonPts = undefined;
@@ -359,58 +380,50 @@ function endSeason(s) {
     else if (d.age <= 31) { d.pace += rand(-0.6, 0.8); d.craft += rand(0, 1); d.cons += rand(0, 1); }
     else { d.pace -= rand(0.4, 1.8); d.craft -= rand(0, 0.8); d.cons += rand(-0.5, 0.5); }
     ['pace', 'craft', 'cons'].forEach(k => d[k] = clamp(d[k], 55, 99));
+    d.morale = clamp((d.morale ?? 65) * 0.5 + 33, 0, 100);
     if (d.teamId) d.contract--;
   });
   const retiring = s.drivers.filter(d => d.age >= 39 || (d.age >= 35 && Math.random() < 0.3));
   retiring.forEach(d => addNews(s, `👋 ${d.name} anuncia su retirada a los ${d.age} años (${d.titles} títulos, ${d.wins} victorias).`));
-  s.retired = (s.retired || []).concat(retiring.map(d => d.name));
   s.drivers = s.drivers.filter(d => !retiring.includes(d));
   s.drivers.forEach(d => {
     if (!d.teamId || d.contract > 0) return;
-    if (d.teamId !== s.teamId && Math.random() < 0.6) { d.contract = randInt(1, 3); d.salary = driverValue(d); return; } // la IA renueva
+    if (d.teamId !== s.teamId && Math.random() < 0.6) { d.contract = randInt(1, 3); d.salary = driverValue(d); return; }
     if (d.teamId === s.teamId) addNews(s, `📄 El contrato de ${d.name} ha terminado: renuévalo o ficha a otro piloto.`);
     d.teamId = null; d.contract = 0;
   });
-
-  // Nuevos talentos
   for (let i = 0; i < 4; i++) s.drivers.push(makeRookie(s));
 
-  // Renovaciones automáticas de la IA (mantienen a sus mejores pilotos)
   s.season++;
   s.round = 0;
   s.raceResults = [];
-  s.lastRace = null;
+  s.weekend = null;
   s.phase = 'offseason';
   s.sponsor = null;
   s.sponsorOffers = makeSponsorOffers(s);
+  s.staffMarket = makeStaffMarket(s);
   s.calendar = deepCopy(s.baseCalendar || CIRCUITS);
   save(s);
 }
 
 function makeRookie(s) {
-  const pot = randInt(80, 95);
-  const pace = randInt(70, 79);
   return {
     id: 'd' + (s.nextDriverId++), name: pick(FIRST_NAMES) + ' ' + pick(LAST_NAMES), nat: pick(NATS), age: randInt(18, 20),
-    pace, craft: randInt(68, 77), cons: randInt(66, 75), pot, teamId: null, salary: 1, contract: 0,
-    titles: 0, wins: 0, podiums: 0, starts: 0, rookie: true,
+    pace: randInt(70, 79), craft: randInt(68, 77), cons: randInt(66, 75), pot: randInt(80, 95), teamId: null, salary: 1, contract: 0,
+    titles: 0, wins: 0, podiums: 0, starts: 0, rookie: true, morale: 70,
   };
 }
 
 function freeAgents(s) { return s.drivers.filter(d => !d.teamId).sort((a, b) => driverRating(b) - driverRating(a)); }
-
-function requiredSalary(s, d) {
-  const rep = myTeam(s).rep;
-  return Math.round(driverValue(d) * (1.3 - rep / 200) * 10) / 10;
-}
+function requiredSalary(s, d) { return Math.round(driverValue(d) * (1.3 - myTeam(s).rep / 200) * 10) / 10; }
 function signDriver(s, id, salary, years) {
   const d = driver(s, id);
   if (teamDrivers(s, s.teamId).length >= 2) return 'Ya tienes dos pilotos. Libera un asiento primero.';
   if (d.teamId) return 'El piloto ya tiene equipo.';
-  const req = requiredSalary(s, d);
-  if (salary < req) return `${d.name} rechaza la oferta. Pide al menos ${fmtM(req)} por temporada.`;
   if (d.age < 18) return 'Los pilotos menores de 18 años no pueden competir.';
-  d.teamId = s.teamId; d.salary = salary; d.contract = years;
+  const req = requiredSalary(s, d);
+  if (!(salary >= req)) return `${d.name} rechaza la oferta. Pide al menos ${fmtM(req)} por temporada.`;
+  d.teamId = s.teamId; d.salary = salary; d.contract = years; d.morale = clamp(60 + (salary - req) * 5, 60, 90);
   addNews(s, `✍️ ${d.name} firma por ${years} temporada(s) con ${myTeam(s).name}.`);
   save(s); return null;
 }
@@ -426,6 +439,7 @@ function releaseDriver(s, id) {
 function renewDriver(s, id, years) {
   const d = driver(s, id);
   if (d.contract + years > 3) return 'Los contratos tienen un máximo de 3 temporadas.';
+  if ((d.morale ?? 65) < 35) return `${d.name} está descontento (moral ${Math.round(d.morale)}) y no quiere renovar.`;
   d.salary = requiredSalary(s, d); d.contract += years;
   addNews(s, `🔁 ${d.name} renueva por ${years} temporada(s) más (${fmtM(d.salary)}/año).`);
   save(s); return null;
@@ -436,10 +450,10 @@ function aiFillSeats(s) {
   for (const t of order) {
     while (teamDrivers(s, t.id).length < 2) {
       const pool = freeAgents(s).filter(d => d.age >= 18);
-      const affordable = pool.filter(d => driverValue(d) <= t.budget / 8) ;
+      const affordable = pool.filter(d => driverValue(d) <= t.budget / 8);
       const d = (affordable.length ? affordable : pool)[0];
       if (!d) { s.drivers.push(makeRookie(s)); continue; }
-      d.teamId = t.id; d.salary = driverValue(d); d.contract = randInt(1, 3);
+      d.teamId = t.id; d.salary = driverValue(d); d.contract = randInt(1, 3); d.morale = 70;
     }
   }
 }
@@ -450,11 +464,11 @@ function startSeason(s) {
   aiFillSeats(s);
   ledger(s, 'Asignación de presupuesto de temporada', myTeam(s).budget * 0.35);
   s.phase = 'season';
-  addNews(s, `Arranca la temporada ${s.season}. Objetivo del consejo: ${ordinal(boardTarget(s))} o mejor.`);
+  addNews(s, `🚦 Arranca la temporada ${s.season}. Objetivo del consejo: ${ordinal(boardTarget(s))} o mejor.`);
   save(s); return null;
 }
 
 // ---------- guardado ----------
 function save(s) { try { localStorage.setItem(SAVE_KEY, JSON.stringify(s)); } catch (e) { /* almacenamiento no disponible */ } }
-function load() { try { const raw = localStorage.getItem(SAVE_KEY); return raw ? JSON.parse(raw) : null; } catch (e) { return null; } }
+function load() { try { const raw = localStorage.getItem(SAVE_KEY); return raw ? migrate(JSON.parse(raw)) : null; } catch (e) { return null; } }
 function wipe() { try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* nada */ } }

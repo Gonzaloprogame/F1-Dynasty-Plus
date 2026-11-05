@@ -83,7 +83,7 @@ function convertExternalRoster(raw, driverSet, label) {
       base: Math.round((305 / laps) / (250 - idf * 0.7) * 3600 * 10) / 10,
       df: clamp(0.4 + idf / 90, 0.4, 1.5), pw: clamp(1.7 - idf / 80, 0.5, 1.6),
       wear: clamp(0.6 + (c.tireDeg ?? 0.5) * 0.8, 0.6, 1.4), ovt: clamp(1 - (c.overtakingDiff ?? 0.5), 0.05, 0.8),
-      rain: RAIN_BY_COUNTRY[c.country] ?? 0.15, sc: clamp(c.safetyCar ?? 0.4, 0, 0.95),
+      rain: RAIN_BY_COUNTRY[c.country] ?? 0.15, sc: clamp(c.safetyCar ?? 0.4, 0, 0.95), sprint: !!c.sprint,
     };
   }) : CIRCUITS;
 
