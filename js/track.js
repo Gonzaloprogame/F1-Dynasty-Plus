@@ -35,8 +35,11 @@ function trackPathD(name) {
   return d + 'Z';
 }
 
-function trackSVG(name, { id = 'trk', cars = '' } = {}) {
-  const d = trackPathD(name);
+// Acepta un circuito (objeto del calendario) o un nombre. Usa el trazado real si ya está cargado.
+function trackSVG(c, { id = 'trk', cars = '' } = {}) {
+  const name = typeof c === 'string' ? c : c.name;
+  const geo = typeof c === 'object' && typeof hasRealTrack === 'function' && hasRealTrack(c) ? getTrackGeometry(c) : null;
+  const d = geo ? realTrackPathD(geo) : trackPathD(name);
   return `<svg class="track" viewBox="0 0 400 250" role="img" aria-label="Trazado de ${name.replace(/"/g, '')}">
     <path d="${d}" class="trk-run"/>
     <path d="${d}" class="trk-asphalt"/>

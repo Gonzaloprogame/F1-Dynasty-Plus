@@ -4,6 +4,7 @@
   --radius: 10px;
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
   --asphalt: #2b2f37; --runoff: #3a414d;
+  --hud-bg: rgba(12, 15, 20, 0.78); --hud-fg: #f3f5f8;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
@@ -138,3 +139,31 @@ input[type=range] { width: 100%; }
   .strat { grid-template-columns: 20px 1fr; } .strat > span:nth-child(n+3) { grid-column: 2; }
   .forecast { gap: 8px; } .auto { margin-left: 0; }
 }
+
+/* ---- vista 3D ---- */
+.trackcard { position: relative; }
+.viewbar { gap: 8px; margin-bottom: 10px; }
+.viewbar .seg { margin-top: 0; }
+.v3d { position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: 70vh; border-radius: 8px; overflow: hidden; background: #0b0e12; touch-action: none; }
+.v3d-canvas { width: 100%; height: 100%; display: block; cursor: grab; }
+.v3d-canvas:active { cursor: grabbing; }
+.v3d-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--hud-fg); font-weight: 600; }
+.v3d-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.v3d-label { position: absolute; left: 0; top: 0; font: 700 11px/1.3 system-ui, sans-serif; color: var(--hud-fg); background: var(--hud-bg); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+.v3d-label.mine { box-shadow: inset 3px 0 0 var(--accent); }
+.v3d-label.foll { background: var(--accent); }
+.v3d-hud { position: absolute; left: 10px; bottom: 10px; z-index: 2; background: var(--hud-bg); color: var(--hud-fg); border-radius: 8px; padding: 8px 12px; min-width: 190px; font-size: 13px; pointer-events: none; }
+.v3d-hud:empty { display: none; }
+.hud-name { display: flex; align-items: center; gap: 6px; }
+.hud-main { display: flex; align-items: baseline; gap: 6px; margin: 2px 0; font-variant-numeric: tabular-nums; }
+.hud-speed { font-size: 30px; font-weight: 800; line-height: 1; min-width: 2.2em; text-align: right; }
+.hud-gear { margin-left: auto; font-size: 22px; font-weight: 800; background: var(--hud-fg); color: #111; border-radius: 6px; padding: 0 9px; }
+.hud-row { display: flex; gap: 10px; align-items: center; color: var(--hud-fg); opacity: .9; }
+.hud-row .tyre { background: transparent; color: var(--hud-fg); }
+.minimap { position: absolute; top: 62px; right: 22px; width: min(34%, 190px); background: var(--hud-bg); border-radius: 8px; padding: 4px; pointer-events: none; z-index: 2; }
+.minimap .car text { display: none; }
+.v3d-tip { margin: 8px 0 0; }
+.tower .r { cursor: pointer; }
+.tower .r.foll { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (max-width: 600px) { .v3d { aspect-ratio: 4 / 3; } .hud-speed { font-size: 24px; } .minimap { width: 34%; top: 104px; } }
+@media (prefers-reduced-motion: reduce) { .v3d-label { transition: none; } }

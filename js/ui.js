@@ -4,6 +4,9 @@
 let S = load();
 let view = S ? 'hq' : 'new';
 let live = null; // carrera o sprint en directo
+let V3D = null;   // módulo 3D (se carga al activarlo)
+let pref3d = (() => { try { return localStorage.getItem('pp_view3d') === '1'; } catch (e) { return false; } })();
+const CAMS = { chase: 'Persecución', tv: 'TV', heli: 'Helicóptero', onboard: 'Cámara T', free: 'Libre' };
 let roster = defaultRoster();
 let rosterRaw = null, rosterLabel = '', rosterSet = 'base';
 const EXAMPLE_ROSTER_URL = 'https://raw.githubusercontent.com/RuleImpossible3362/F1DynastyRosters/refs/heads/main/F1%20DYNASTY%202026%20ROSTER.json';
@@ -109,7 +112,7 @@ const VIEWS = {
     if (S.phase === 'season') action = `<div class="row spread"><h3>Siguiente: ${esc(next.name)} ${next.sprint ? '<span class="badge accent">Sprint</span>' : ''}</h3></div>
       <p class="muted small">${esc(next.city)} · ${next.laps} vueltas · lluvia ${r1(next.rain * 100)}%</p>
       ${S.weekend ? stageBar(S.weekend) : ''}
-      <div class="trackmini">${trackSVG(next.name, { id: 'hqtrk' })}</div>
+      <div class="trackmini">${trackSVG(next, { id: 'hqtrk' })}</div>
       <button class="btn" data-go="weekend">${S.weekend ? 'Continuar el fin de semana' : 'Ir al fin de semana'}</button>`;
     else if (S.phase === 'seasonEnd') action = `<h3>¡Temporada ${S.season} terminada!</h3><p class="muted small">Campeón: ${esc(ds[0].d.name)} · Constructores: ${esc(ts[0].name)}</p><button class="btn" data-act="endSeason">Cerrar la temporada e ir a la pretemporada</button>`;
     else action = `<h3>Pretemporada ${S.season}</h3><p class="muted small">Ficha pilotos y personal, y elige patrocinador antes de arrancar.</p><div class="row"><button class="btn ghost" data-go="drivers">Pilotos</button><button class="btn ghost" data-go="staff">Personal</button><button class="btn ghost" data-go="finance">Patrocinadores</button><button class="btn" data-act="startSeason">Iniciar temporada</button></div>`;
@@ -136,7 +139,7 @@ const VIEWS = {
       const trait = (v, lo, hi) => v > 1.15 ? hi : v < 0.85 ? lo : 'Media';
       return `<div class="grid">
         <div class="card hero"><h2>${esc(c.name)} ${c.sprint ? '<span class="badge accent">Sprint</span>' : ''}</h2><p class="muted">${esc(c.city)} · Ronda ${S.round + 1} de ${S.calendar.length}</p>
-          <div class="trackwrap">${trackSVG(c.name, { id: 'pvtrk' })}</div></div>
+          <div class="trackwrap">${trackSVG(c, { id: 'pvtrk' })}</div></div>
         <div class="card"><h3>Ficha del circuito</h3><table class="small">
           <tr><td>Vueltas</td><td class="num">${c.laps}</td></tr>
           <tr><td>Carga aerodinámica</td><td class="num">${trait(c.df, 'Baja', 'Alta')}</td></tr>
@@ -272,6 +275,8 @@ const VIEWS = {
       <p><b>Paddock Plus</b> es un juego original de gestión de escuderías. Se inspira en las ideas del género: en
       <a href="https://f1dynasty.com/" target="_blank" rel="noopener">F1 Dynasty</a> (gestor de dinastías en el navegador) y en los juegos de gestión de monoplazas como F1® Manager 2024 (retransmisión en directo, decisiones de estrategia, reglajes y personal). Gracias a sus creadores por la inspiración.</p>
       <p>Ninguno de esos juegos publica su código bajo una licencia abierta, así que este proyecto <b>no copia su código, sus textos, su arte ni sus datos</b>: todo se ha escrito desde cero y los trazados de los circuitos se generan de forma procedural.</p>
+      <p>La retransmisión 3D se inspira en <a href="https://hybridsim.app/" target="_blank" rel="noopener">HybridSim</a> (circuitos reconstruidos a partir de datos abiertos en el navegador). No usa su código, sus modelos ni sus texturas: el coche, el circuito 3D y las texturas se generan aquí. Usa <a href="https://threejs.org/" target="_blank" rel="noopener">three.js</a> (licencia MIT).</p>
+      <p>Los trazados reales proceden de la <a href="https://github.com/TUMFTM/racetrack-database" target="_blank" rel="noopener">TUM racetrack-database</a> de la Universidad Técnica de Múnich (LGPL-3.0), incluida sin modificar en <code>data/racetrack-database</code>, con líneas centrales originales de © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">colaboradores de OpenStreetMap</a> (ODbL). Los circuitos que no están en esa base de datos usan un trazado generado.</p>
       <p>El importador de plantillas lee el formato JSON del editor de F1 Dynasty para que puedas usar las plantillas de la comunidad, como las de <a href="https://github.com/RuleImpossible3362/F1DynastyRosters" target="_blank" rel="noopener">RuleImpossible3362/F1DynastyRosters</a>. Esas plantillas pertenecen a sus autores, se descargan en tu navegador y no forman parte de este proyecto.</p>
       <p>No está afiliado a Formula One Group, la FIA, Frontier Developments ni ninguna escudería. "Formula 1", "F1" y "F1 Manager" son marcas de sus respectivos propietarios. Los equipos, pilotos y patrocinadores de la plantilla por defecto son ficticios.</p>
       <button class="btn ghost" data-go="${S ? 'hq' : 'new'}">Volver</button></div>`;
@@ -369,7 +374,13 @@ function liveView() {
   return `<div class="live">
     <div class="card livebar"><div id="liveHead" class="row spread"></div></div>
     <div class="livegrid">
-      <div class="card trackcard">${trackSVG(c.name, { id: 'livetrk', cars: sim.cars.map(x => `<g id="car-${x.id}" class="car ${x.mine ? 'mine' : ''}"><circle r="${x.mine ? 6 : 4.5}" fill="${team(S, x.teamId).color}"/>${x.mine ? `<text y="-9">${abbr(x.d.name)}</text>` : ''}</g>`).join('') })}</div>
+      <div class="card trackcard">
+        <div class="row spread viewbar"><div class="seg" role="group" aria-label="Vista"><button class="${pref3d ? '' : 'on'}" data-act="view2d">2D</button><button class="${pref3d ? 'on' : ''}" data-act="view3d">3D</button></div>
+          ${pref3d ? `<div class="seg" role="group" aria-label="Cámara">${Object.entries(CAMS).map(([k, l]) => `<button data-act="cam" data-m="${k}" class="${(L.cam || 'chase') === k ? 'on' : ''}">${l}</button>`).join('')}</div>` : ''}
+          <span class="small muted">${hasRealTrack(c) ? '📍 ' + esc(getTrackGeometry(c).label) : 'Trazado generado'}</span></div>
+        ${pref3d ? '<div id="v3d" class="v3d"><div class="v3d-loading">Cargando la vista 3D…</div><div id="v3dHud" class="v3d-hud"></div></div>' : ''}
+        <div class="${pref3d ? 'minimap' : ''}">${trackSVG(c, { id: 'livetrk', cars: sim.cars.map(x => `<g id="car-${x.id}" class="car ${x.mine ? 'mine' : ''}"><circle r="${x.mine ? 6 : 4.5}" fill="${team(S, x.teamId).color}"/>${x.mine ? `<text y="-9">${abbr(x.d.name)}</text>` : ''}</g>`).join('') })}</div>
+        ${pref3d ? '<p class="small muted v3d-tip">Arrastra para girar la cámara, usa la rueda para acercar y toca un coche (o su fila en la tabla) para seguirlo.</p>' : ''}</div>
       <div class="card"><div id="tower" class="tower"></div></div>
     </div>
     <div class="grid" style="margin-top:14px">
@@ -386,13 +397,13 @@ function liveHUD() {
   const flag = sim.sc ? `<span class="flag yellow">${sim.sc.type === 'SC' ? 'SAFETY CAR' : 'VSC'}</span>` : sim.finished ? '<span class="flag chk">🏁 FINAL</span>' : '<span class="flag green">BANDERA VERDE</span>';
   head.innerHTML = `<div class="row"><b>${esc(sim.c.name)}${sim.kind === 'sprint' ? ' · Sprint' : ''}</b><span class="lapbig">Vuelta ${Math.min(sim.lap, sim.totalLaps)}/${sim.totalLaps}</span>${flag}<span title="${wxText(w)}">${wxIcon(w)} ${wxText(w)}</span></div>
     <div class="row">${L.paused ? '<button class="btn sm" data-act="lvPause">▶ Seguir</button>' : '<button class="btn sm ghost" data-act="lvPause">⏸ Pausa</button>'}
-      ${[1, 2, 4, 8].map(x => `<button class="btn sm ${L.speed === x ? '' : 'ghost'}" data-act="lvSpeed" data-x="${x}">${x}×</button>`).join('')}
+      ${(is3D() ? SPEEDS_3D : SPEEDS_2D).map(x => `<button class="btn sm ${(is3D() ? (L.speed3 || 1) : L.speed) === x ? '' : 'ghost'}" data-act="lvSpeed" data-x="${x}" title="${is3D() ? (x === 1 ? 'Tiempo real' : x + ' veces más rápido que en la realidad') : ''}">${x}×</button>`).join('')}
       <button class="btn sm ghost" data-act="lvSkip">⏭ Al final</button></div>`;
 
   document.getElementById('tower').innerHTML = snap.cars.map((x, i) => {
     const car = sim.byId[x.id];
     const gap = x.out ? '<span class="bad">OUT</span>' : i === 0 ? 'Líder' : x.gap > ref ? '+' + Math.floor(x.gap / ref) + ' V' : '+' + x.gap.toFixed(1);
-    return `<div class="r ${car.mine ? 'mine' : ''} ${x.out ? 'out' : ''}"><b>${i + 1}</b><span class="nm">${teamChip(team(S, car.teamId))}${esc(abbr(car.d.name))} <span class="small muted hide-sm">${esc(car.d.name)}</span></span>${x.out ? '<span></span>' : tyre(x.comp)}<span class="num small">${x.pitted ? '<span class="badge">BOX</span>' : gap}</span></div>`;
+    return `<div class="r ${car.mine ? 'mine' : ''} ${x.out ? 'out' : ''} ${pref3d && L.v3d && L.v3d.getFollow() === x.id ? 'foll' : ''}" data-act="follow" data-id="${x.id}"><b>${i + 1}</b><span class="nm">${teamChip(team(S, car.teamId))}${esc(abbr(car.d.name))} <span class="small muted hide-sm">${esc(car.d.name)}</span></span>${x.out ? '<span></span>' : tyre(x.comp)}<span class="num small">${x.pitted ? '<span class="badge">BOX</span>' : gap}</span></div>`;
   }).join('');
 
   const mine = sim.cars.filter(x => x.mine);
@@ -426,7 +437,9 @@ function drawCars(f) {
     if (x.out) { g.style.display = 'none'; continue; }
     const p0 = prev[x.id] && prev[x.id].prog !== null ? prev[x.id].prog : x.prog;
     const p = p0 + (x.prog - p0) * f;
-    const pt = path.getPointAtLength((((p % 1) + 1) % 1) * len);
+    const frac = (((p % 1) + 1) % 1);
+    const geo = getTrackGeometry(live.sim.c);
+    const pt = path.getPointAtLength(hasRealTrack(live.sim.c) ? geo.fracToDist(frac) / geo.line.length * len : frac * len);
     g.setAttribute('transform', `translate(${pt.x.toFixed(1)},${pt.y.toFixed(1)})`);
   }
 }
@@ -434,18 +447,108 @@ function drawCars(f) {
 function liveLoop(now) {
   const L = live;
   if (!L || view !== 'weekend' || L.done) return;
-  const dur = 1500 / L.speed;
+  const dur = lapDur();
   if (!L.paused) {
-    if (!L.t0) L.t0 = now - dur;
+    if (!L.t0) L.t0 = now - dur + (pref3d && L.sim.lap === 0 ? 4000 : 0); // en 3D, unos segundos de parrilla con el semáforo encendido
     L.f = (now - L.t0) / dur;
     if (L.f >= 1) {
-      if (L.sim.finished) { L.done = true; render(); return; }
+      if (L.sim.finished) { L.done = true; end3D(); render(); return; }
       L.prev = L.sim.snap; L.sim.step(); L.next = L.sim.snap; L.t0 = now; L.f = 0;
       liveHUD();
     }
   }
   drawCars(Math.min(1, L.f));
+  if (L.v3d && pref3d && document.getElementById('v3d')) {
+    const dt = L.lastNow ? (now - L.lastNow) / 1000 : 0.016;
+    L.v3d.frame(state3D(Math.min(1, L.f)), dt);
+    if (now - (L.hudT || 0) > 120) { L.hudT = now; hud3D(); }
+  }
+  L.lastNow = now;
   L.raf = requestAnimationFrame(liveLoop);
+}
+
+// ---------- vista 3D ----------
+// En 2D una vuelta dura 1,5 s a 1×; en 3D la escala es de tiempo real (1× = la vuelta dura lo que duraría de verdad)
+const SPEEDS_2D = [1, 2, 4, 8], SPEEDS_3D = [1, 4, 16, 60];
+function is3D() { return pref3d && !!live; }
+function lapDur() {
+  if (!live) return 1500;
+  if (is3D()) return getTrackGeometry(live.sim.c).lapTime * 1000 / (live.speed3 || 1);
+  return 1500 / live.speed;
+}
+function retime(fn) { const f = live.f; fn(); live.t0 = performance.now() - f * lapDur(); }
+function set3D(on) { if (live) { const f = live.f; pref3d = on; live.t0 = performance.now() - f * lapDur(); } pref3d = on; try { localStorage.setItem('pp_view3d', on ? '1' : '0'); } catch (e) { /* sin almacenamiento */ } render(); }
+async function mount3D() {
+  const L = live, el = document.getElementById('v3d');
+  if (!L || !el) return;
+  if (L.v3d) { L.v3d.attach(el); el.querySelector('.v3d-loading')?.remove(); return; }
+  if (L.v3dLoading) return;
+  L.v3dLoading = true;
+  try {
+    await ensureRealTrack(L.sim.c);
+    V3D = V3D || await import('./view3d.js');
+    if (live !== L || L.done) return;
+    const target = document.getElementById('v3d');
+    if (!target) return;
+    L.v3d = V3D.createView3D(target, {
+      geo: getTrackGeometry(L.sim.c),
+      cars: L.sim.cars.map(x => ({ id: x.id, color: team(S, x.teamId).color, mine: x.mine, label: abbr(x.d.name) })),
+      onFollow: () => liveHUD(),
+    });
+    L.v3d.setCamera(L.cam || 'chase');
+    { const f = L.f; L.t0 = performance.now() - f * lapDur(); }
+    liveHUD();
+    target.querySelector('.v3d-loading')?.remove();
+    if (L.paused || !L.raf) { L.v3d.frame(state3D(Math.min(1, L.f)), 0.016); }
+  } catch (err) {
+    console.warn(err);
+    toast('No se pudo iniciar la vista 3D en este dispositivo. Se muestra la vista 2D.');
+    pref3d = false; render();
+  } finally { L.v3dLoading = false; }
+}
+function end3D() { if (live && live.v3d) { live.v3d.dispose(); live.v3d = null; } }
+
+const GEARS = [0, 85, 120, 155, 190, 225, 262, 296];
+function liveSpeedKmh(geo, dist) {
+  const sim = live.sim;
+  let v = geo.speedAt(dist) * 3.6 * Math.min(1.1, Math.max(0.75, geo.lapTime / sim.c.base));
+  if (sim.sc) v *= sim.sc.type === 'SC' ? 0.5 : 0.6;
+  return v * (1 - 0.18 * sim.wet);
+}
+function state3D(f) {
+  const L = live, sim = L.sim, geo = getTrackGeometry(sim.c), len = geo.line.length;
+  const prev = Object.fromEntries(L.prev.cars.map(x => [x.id, x]));
+  const list = L.next.cars.map(x => {
+    const car = sim.byId[x.id];
+    const p0 = prev[x.id] && prev[x.id].prog !== null ? prev[x.id].prog : x.prog;
+    const p = x.prog === null ? null : p0 + (x.prog - p0) * f;
+    const D = p === null ? null : Math.floor(p) * len + geo.fracToDist(((p % 1) + 1) % 1);
+    return { id: x.id, D, dist: D === null ? 0 : ((D % len) + len) % len, out: x.out, comp: x.comp, pos: x.pos, pitted: x.pitted, label: abbr(car.d.name), mine: car.mine, lat: 0 };
+  });
+  // Separación lateral cuando dos coches van pegados (adelantamientos y rebufo)
+  L.sides = L.sides || {};
+  const act = list.filter(c => !c.out).sort((a, b) => b.D - a.D);
+  act.forEach((c, i) => {
+    const a = act[i - 1];
+    if (a && a.D - c.D < 11) { c.lat = a.lat > 0.1 ? -2.7 : a.lat < -0.1 ? 2.7 : (L.sides[c.id] = L.sides[c.id] || (Math.random() < 0.5 ? 2.7 : -2.7)); }
+    else if (sim.lap === 0) c.lat = (c.pos % 2 ? 1 : -1) * 2.4;
+  });
+  return { cars: list, wet: sim.wet, sc: sim.sc ? sim.sc.type : null, lights: sim.lap === 0, compColors: Object.fromEntries(Object.entries(COMPOUNDS).map(([k, v]) => [k, v.color])) };
+}
+function hud3D() {
+  const L = live, el = document.getElementById('v3dHud');
+  if (!L || !L.v3d || !el) return;
+  const id = L.v3d.getFollow(), car = L.sim.byId[id];
+  if (!car) return;
+  const st = state3D(Math.min(1, L.f)).cars.find(c => c.id === id);
+  const geo = getTrackGeometry(L.sim.c);
+  const still = car.out || L.next.lap === 0;
+  const kmh = still ? 0 : Math.round(liveSpeedKmh(geo, st.dist));
+  const gear = still ? 'N' : GEARS.filter(g => kmh >= g).length;
+  const i = L.sim.order.indexOf(id), ahead = i > 0 ? L.sim.byId[L.sim.order[i - 1]] : null;
+  el.innerHTML = `<div class="hud-name">${teamChip(team(S, car.teamId))}<b>P${i + 1}</b> ${esc(car.d.name)}</div>
+    <div class="hud-main"><span class="hud-speed">${kmh}</span><span class="small">km/h</span><span class="hud-gear">${gear}</span></div>
+    <div class="hud-row">${tyre(car.compound)} <span>${Math.round(car.wear)}% desgaste</span>${ahead && !car.out ? `<span>↑ ${(car.t - ahead.t).toFixed(1)} s</span>` : ''}</div>`;
 }
 
 function resultsView() {
@@ -535,16 +638,21 @@ const ACTIONS = {
   toRace() { S.weekend.stage = 'race'; save(S); render(); },
   liveRace() { startLive('race', false); },
   liveContinue() {
+    end3D();
     const res = live.sim.results();
     if (live.kind === 'sprint') { finishSprint(S, res); live = null; render(); }
     else { finishRace(S, res, S.weekend.weather.kind !== 'dry'); live = null; go('hq'); }
   },
-  lvPause() { live.paused = !live.paused; if (!live.paused) live.t0 = performance.now() - live.f * 1500 / live.speed; liveHUD(); },
-  lvSpeed(el) { const f = live.f; live.speed = +el.dataset.x; live.t0 = performance.now() - f * 1500 / live.speed; liveHUD(); },
-  lvSkip() { teamDrivers(S, S.teamId).forEach(d => live.sim.setAuto(d.id, true)); live.sim.runToEnd(); live.done = true; render(); },
+  lvPause() { live.paused = !live.paused; if (!live.paused) live.t0 = performance.now() - live.f * lapDur(); liveHUD(); },
+  lvSpeed(el) { retime(() => { if (is3D()) live.speed3 = +el.dataset.x; else live.speed = +el.dataset.x; }); liveHUD(); },
+  lvSkip() { teamDrivers(S, S.teamId).forEach(d => live.sim.setAuto(d.id, true)); live.sim.runToEnd(); live.done = true; end3D(); render(); },
   lvMode(el) { live.sim.setMode(el.dataset.id, el.dataset.m); liveHUD(); },
   lvBox(el) { live.sim.requestBox(el.dataset.id, el.dataset.c); liveHUD(); },
   lvCancel(el) { live.sim.cancelBox(el.dataset.id); liveHUD(); },
+  view2d() { set3D(false); },
+  view3d() { set3D(true); },
+  cam(el) { if (live) { live.cam = el.dataset.m; live.v3d && live.v3d.setCamera(live.cam); document.querySelectorAll('[data-act="cam"]').forEach(b => b.classList.toggle('on', b === el)); } },
+  follow(el) { if (live && live.v3d) { live.v3d.setFollow(el.dataset.id); hud3D(); liveHUD(); } },
   lvOrder() { const e = live.sim.teamOrder(S.teamId); if (e) toast(e); liveHUD(); },
   endSeason() { endSeason(S); go('hq'); },
   startSeason() { const e = startSeason(S); e ? toast(e) : go('hq'); },
@@ -584,7 +692,7 @@ const ACTIONS = {
     try { const data = migrate(JSON.parse(document.getElementById('pasteText').value)); if (!data.teams || !data.drivers) throw new Error(); S = data; save(S); live = null; go('hq'); toast('Partida importada.'); }
     catch (err) { toast('El texto no es una partida válida.'); }
   },
-  reset(el) { if (!armed(el, 'Se borrará la partida actual de este navegador.')) return; wipe(); S = null; live = null; go('new'); },
+  reset(el) { if (!armed(el, 'Se borrará la partida actual de este navegador.')) return; wipe(); S = null; end3D(); live = null; go('new'); },
 };
 
 document.addEventListener('click', e => {
@@ -625,8 +733,13 @@ function render() {
   renderChrome();
   $app.innerHTML = VIEWS[view]();
   ['hqtrk', 'pvtrk', 'livetrk'].forEach(id => document.getElementById(id) && placeStartLine(id));
+  // Carga en segundo plano el trazado real del circuito que se está mostrando y vuelve a dibujar
+  const shown = live ? live.sim.c : (S && S.phase === 'season' ? S.calendar[S.round] : null);
+  const key = shown && realTrackKey(shown);
+  if (key && !(key in TRACK_GEO) && !render.loading) { render.loading = true; ensureRealTrack(shown).then(g => { render.loading = false; if (g) render(); }); }
   if (live && view === 'weekend' && !live.done) {
     liveHUD(); drawCars(Math.min(1, live.f));
+    if (pref3d) mount3D();
     cancelAnimationFrame(live.raf); live.raf = requestAnimationFrame(liveLoop);
   }
 }
