@@ -255,6 +255,7 @@ class RaceSim {
         const lane = sc ? (sc.type === 'SC' ? 9 : 12) : 19;
         t += lane + stat;
         if (x.mine) this.log(lap, 'pit', `🔧 ${x.d.name} entra en boxes: ${COMPOUNDS[x.box].name.toLowerCase()} (${stat.toFixed(1)} s).`, true);
+        x.pitLoss = lane + stat;
         x.compound = x.box; x.box = null; x.age = 0; x.wear = 0; x.pits++; x.pitted = true;
         if (!x.used.includes(x.compound)) x.used.push(x.compound);
       }
@@ -297,6 +298,11 @@ class RaceSim {
         } else { x.t = ahead.t + 0.3 + Math.random() * 0.2; break; }
       }
       newOrder.splice(pos, 0, id);
+      // Los coches que acaba de adelantar quedan detrás también en el tiempo (si luego se atascó tras otro coche)
+      for (let k = pos + 1; k < newOrder.length; k++) {
+        const behind = this.byId[newOrder[k]], front = this.byId[newOrder[k - 1]];
+        if (behind.t <= front.t) behind.t = front.t + 0.15 + Math.random() * 0.1; else break;
+      }
     }
     if (this.sc && this.sc.type === 'SC') {
       const lead = this.byId[newOrder[0]].t;
@@ -356,7 +362,7 @@ class RaceSim {
       cars: this.order.map((id, i) => {
         const x = this.byId[id];
         const gap = x.out || !lead ? null : x.t - lead.t;
-        return { id, pos: i + 1, gap, out: x.out, comp: x.compound, age: x.age, wear: x.wear, pitted: x.pitted, prog: x.out ? null : this.lap - (this.lap === 0 ? x.grid * 0.004 : gap / ref) };
+        return { id, pos: i + 1, gap, out: x.out, comp: x.compound, age: x.age, wear: x.wear, pitted: x.pitted, pitLoss: x.pitted ? x.pitLoss : 0, prog: x.out ? null : this.lap - (this.lap === 0 ? x.grid * 0.004 : gap / ref) };
       }),
     };
   }

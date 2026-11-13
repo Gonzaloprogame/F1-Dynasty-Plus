@@ -4,6 +4,8 @@
 'use strict';
 
 const TRACK_DATA_BASE = 'data/racetrack-database/';
+// Calle de boxes: metros antes (entrada) y después (salida) de la línea de meta
+const PIT_IN = -330, PIT_OUT = 270;
 // Patrones (sin tildes, en minúsculas) → archivo. Primero se busca la ciudad y luego el nombre del GP.
 const REAL_TRACK_CITY = [
   [/\bsakhir\b|\bbahrein\b|\bbarein\b/, 'Sakhir'], [/\bmelbourne\b/, 'Melbourne'], [/\bsuzuka\b/, 'Suzuka'],

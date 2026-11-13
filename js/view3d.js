@@ -41,9 +41,26 @@ const TEX = () => ({
     g.addColorStop(0, 'rgba(255,255,255,0.9)'); g.addColorStop(1, 'rgba(255,255,255,0)');
     c.fillStyle = g; c.fillRect(0, 0, w, h);
   }),
-  sky: (top, mid, bottom) => {
-    const t = canvasTex(4, 256, (c, w, h) => { const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, top); g.addColorStop(0.48, mid); g.addColorStop(0.52, bottom); g.addColorStop(1, bottom); c.fillStyle = g; c.fillRect(0, 0, w, h); });
-    t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; return t;
+  sky: (wet) => {
+    const t = canvasTex(1024, 512, (c, w, h) => {
+      const g = c.createLinearGradient(0, 0, 0, h);
+      if (wet) { g.addColorStop(0, '#4b5460'); g.addColorStop(0.47, '#959ea8'); g.addColorStop(0.5, '#8a929b'); g.addColorStop(1, '#7d858e'); }
+      else { g.addColorStop(0, '#2b6fc0'); g.addColorStop(0.28, '#5f9fdc'); g.addColorStop(0.47, '#d3e6f5'); g.addColorStop(0.5, '#b8cbd8'); g.addColorStop(1, '#a8bac8'); }
+      c.fillStyle = g; c.fillRect(0, 0, w, h);
+      if (!wet) {
+        const sx = w * 0.62, sy = h * 0.22, sg = c.createRadialGradient(sx, sy, 0, sx, sy, 150);
+        sg.addColorStop(0, 'rgba(255,252,240,1)'); sg.addColorStop(0.05, 'rgba(255,248,228,0.95)'); sg.addColorStop(0.22, 'rgba(255,240,205,0.3)'); sg.addColorStop(1, 'rgba(255,240,205,0)');
+        c.fillStyle = sg; c.fillRect(0, 0, w, h);
+      }
+      const n = wet ? 160 : 55;
+      for (let i = 0; i < n; i++) {
+        const x = Math.random() * w, y = h * (0.1 + Math.random() * 0.34), r = 18 + Math.random() * (wet ? 90 : 55);
+        const cg = c.createRadialGradient(x, y, 0, x, y, r * 2);
+        cg.addColorStop(0, wet ? 'rgba(105,113,124,0.45)' : 'rgba(255,255,255,0.55)'); cg.addColorStop(1, 'rgba(255,255,255,0)');
+        c.fillStyle = cg; c.beginPath(); c.ellipse(x, y, r * 2.4, r * 0.75, 0, 0, Math.PI * 2); c.fill();
+      }
+    });
+    t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.ClampToEdgeWrapping; return t;
   },
 });
 
@@ -87,12 +104,12 @@ function band(C, latA, latB, h, { vScale = 8, colorFn = null } = {}) {
   return g;
 }
 // Muro vertical a un desplazamiento lateral
-function wall(C, lat, h0, h1, colorFn) {
+function wall(C, lat, h0, h1, colorFn, skip = null) {
   const n = C.n, pos = [], col = [], uv = [], idx = [];
   for (let k = 0; k <= n; k++) {
     const i = k % n, nx = -C.ty[i], ny = C.tx[i], L = lat(i);
     const x = C.x[i] + nx * L, z = -(C.y[i] + ny * L);
-    pos.push(x, h0, z, x, h1, z);
+    pos.push(x, h0, z, x, skip && skip(i) ? h0 : h1, z);
     const c = colorFn(i); col.push(...c, ...c);
     const u = (k === n ? C.length : C.s[i]) / 4; uv.push(u, 0, u, 1);
     if (k < n) { const p = k * 2; idx.push(p, p + 2, p + 1, p + 1, p + 2, p + 3); }
@@ -105,7 +122,32 @@ function wall(C, lat, h0, h1, colorFn) {
   return g;
 }
 
+// Tira lateral solo en los tramos donde test(i) es cierto (pianos, calle de boxes…)
+function strip(C, latA, latB, h, test, colorFn) {
+  const pos = [], col = [], n = C.n;
+  for (let i = 0; i < n; i++) {
+    if (!test(i)) continue;
+    const j = (i + 1) % n, c = colorFn ? colorFn(i) : null;
+    const P = (k, lat) => [C.x[k] - C.ty[k] * lat, h, -(C.y[k] + C.tx[k] * lat)];
+    const q = [P(i, latA(i)), P(i, latB(i)), P(j, latA(j)), P(j, latB(j))];
+    for (const v of [q[0], q[1], q[2], q[1], q[3], q[2]]) { pos.push(...v); if (c) col.push(...c); }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  if (colorFn) g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  const nrm = new Float32Array(pos.length); for (let i = 1; i < nrm.length; i += 3) nrm[i] = 1;
+  g.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  return g;
+}
+function signTex(text) {
+  return canvasTex(128, 96, (c, w, h) => {
+    c.fillStyle = '#f4f4f4'; c.fillRect(0, 0, w, h); c.fillStyle = '#1b2a8f'; c.fillRect(6, 6, w - 12, h - 12);
+    c.fillStyle = '#fff'; c.font = 'bold 54px sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(text, w / 2, h / 2 + 3);
+  });
+}
+
 // ---------- coche (diseño propio con primitivas; morro hacia +X) ----------
+let BLOB = null;
 function buildCar(color, { helmet = '#f4f4f4', accent = '#f2f2f2', safety = false } = {}) {
   const body = new THREE.MeshStandardMaterial({ color, roughness: 0.32, metalness: 0.35 });
   const carbon = new THREE.MeshStandardMaterial({ color: 0x15171b, roughness: 0.55, metalness: 0.2 });
@@ -147,13 +189,17 @@ function buildCar(color, { helmet = '#f4f4f4', accent = '#f2f2f2', safety = fals
     bar = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.1, 0.9), new THREE.MeshStandardMaterial({ color: 0x442200, emissive: 0xffa000, emissiveIntensity: 2 }));
     bar.position.set(0.2, 1.0, 0); g.add(bar);
   }
+  const blob = new THREE.Mesh(new THREE.PlaneGeometry(5.6, 2.4), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.45, depthWrite: false, alphaMap: BLOB }));
+  blob.rotation.x = -Math.PI / 2; blob.position.y = 0.035; g.add(blob);
   return { group: g, wheels, stripe, rain, bar, body };
 }
 
 // ---------- vista ----------
-export function createView3D(container, { geo, cars, onFollow }) {
+export function createView3D(container, { geo, cars, onFollow, onCamera }) {
   const C = geo.center, L = geo.line;
   const T = TEX();
+  BLOB = BLOB || canvasTex(64, 64, (c, w, h) => { const g = c.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2); g.addColorStop(0, '#fff'); g.addColorStop(0.6, '#999'); g.addColorStop(1, '#000'); c.fillStyle = g; c.fillRect(0, 0, w, h); });
+  BLOB.colorSpace = THREE.NoColorSpace;
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
   const small = Math.min(window.innerWidth, window.innerHeight) < 600;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, small ? 1.25 : 1.75));
@@ -166,7 +212,7 @@ export function createView3D(container, { geo, cars, onFollow }) {
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.5, 6000);
-  const skyDry = T.sky('#4a8fd6', '#cfe4f6', '#a9c3d6'), skyWet = T.sky('#5b6470', '#9aa3ad', '#8a929b');
+  const skyDry = T.sky(false), skyWet = T.sky(true);
   const sky = new THREE.Mesh(new THREE.SphereGeometry(4500, 24, 16), new THREE.MeshBasicMaterial({ map: skyDry, side: THREE.BackSide, fog: false, depthWrite: false }));
   scene.add(sky);
   scene.fog = new THREE.Fog(0xbfd6ea, 400, 3200);
@@ -225,13 +271,74 @@ export function createView3D(container, { geo, cars, onFollow }) {
     const nrm = g.attributes.normal; for (let i = 0; i < nrm.count; i++) nrm.setXYZ(i, 0, 1, 0);
     scene.add(new THREE.Mesh(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, ...off(-3) })));
   }
+  // Calle de boxes (lado derecho de la recta de meta) y huecos de entrada/salida en la barrera
+  const pitRel = d => { let r = ((d % C.length) + C.length) % C.length; if (r > C.length / 2) r -= C.length; return r; };
+  const rOf = i => pitRel(C.s[i]);
+  const wallLat = i => wr(i) + RUNOFF + BARRIER_GAP;
+  const inGap = i => { const r = rOf(i); return (r > PIT_IN - 25 && r < PIT_IN + 70) || (r > PIT_OUT - 70 && r < PIT_OUT + 25); };
+  const inPitZone = i => { const r = rOf(i); return r > PIT_IN - 25 && r < PIT_OUT + 25; };
+  const pitAsphalt = new THREE.MeshStandardMaterial({ map: T.asphalt, roughness: 0.9, ...off(-2) });
+  scene.add(new THREE.Mesh(strip(C, i => -wallLat(i) - 1, i => -wallLat(i) - 10, 0.025, inPitZone), pitAsphalt));
+  scene.add(new THREE.Mesh(strip(C, i => -wr(i), i => -wallLat(i) - 1, 0.026, inGap), pitAsphalt));
+  scene.add(new THREE.Mesh(strip(C, i => -wallLat(i) - 5.4, i => -wallLat(i) - 5.6, 0.03, i => inPitZone(i) && Math.floor(C.s[i] / 4) % 2 === 0), lineMat));
+  // Goma en la trazada
+  scene.add(new THREE.Mesh(band(L, () => 1.1, () => -1.1, 0.028), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.18, depthWrite: false, ...off(-3) })));
+
   // Barreras y vallas
   const barCol = i => Math.floor(C.s[i] / 12) % 2 ? [0.92, 0.92, 0.92] : [0.12, 0.35, 0.78];
   const barMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, side: THREE.DoubleSide });
   const fenceMat = new THREE.MeshBasicMaterial({ map: T.fence, transparent: true, side: THREE.DoubleSide, depthWrite: false, opacity: 0.3 });
-  for (const lat of [i => wl(i) + RUNOFF + BARRIER_GAP, i => -wr(i) - RUNOFF - BARRIER_GAP]) {
-    scene.add(new THREE.Mesh(wall(C, lat, 0, 1.1, barCol), barMat));
-    scene.add(new THREE.Mesh(wall(C, lat, 1.1, 4, () => [1, 1, 1]), fenceMat));
+  for (const [lat, skip] of [[i => wl(i) + RUNOFF + BARRIER_GAP, null], [i => -wallLat(i), inGap]]) {
+    scene.add(new THREE.Mesh(wall(C, lat, 0, 1.1, barCol, skip), barMat));
+    scene.add(new THREE.Mesh(wall(C, lat, 1.1, 4, () => [1, 1, 1], skip), fenceMat));
+  }
+  // Garajes con el color de cada equipo y edificio del paddock detrás
+  const teams = [...new Map(cars.map(c => [c.teamId, c.color])).entries()];
+  const slotOf = {};
+  {
+    const wallM = new THREE.MeshStandardMaterial({ color: 0x3a3f47, roughness: 0.8 }), dark = new THREE.MeshStandardMaterial({ color: 0x0d0f12, roughness: 0.9 });
+    const span = (PIT_OUT - 70) - (PIT_IN + 70);
+    teams.forEach(([tid, color], k) => {
+      const r = PIT_IN + 70 + (teams.length > 1 ? k * span / (teams.length - 1) : span / 2);
+      slotOf[tid] = r;
+      const d = (r + C.length) % C.length, i = segIndex(C, d);
+      const p = pointOn(C, d, -(wallLat(i) + 15.5)), th = Math.atan2(p.ty, p.tx);
+      const gar = new THREE.Group();
+      const box = new THREE.Mesh(new THREE.BoxGeometry(Math.max(8, span / teams.length - 1.5), 5.5, 9), wallM); box.position.y = 2.75; box.castShadow = true;
+      const door = new THREE.Mesh(new THREE.PlaneGeometry(Math.max(6, span / teams.length - 4), 3.6), dark); door.position.set(0, 1.8, 4.52);
+      const band = new THREE.Mesh(new THREE.PlaneGeometry(Math.max(8, span / teams.length - 1.5), 1.2), new THREE.MeshStandardMaterial({ color, roughness: 0.5, emissive: color, emissiveIntensity: 0.15 }));
+      band.position.set(0, 4.6, 4.53);
+      gar.add(box, door, band); gar.position.set(p.x, 0, -p.y); gar.rotation.y = th + Math.PI; scene.add(gar);
+    });
+    const midR = (PIT_IN + PIT_OUT) / 2, d = (midR + C.length) % C.length, i = segIndex(C, d);
+    const p = pointOn(C, d, -(wallLat(i) + 28)), th = Math.atan2(p.ty, p.tx);
+    const pad = new THREE.Mesh(new THREE.BoxGeometry(span + 60, 12, 16), new THREE.MeshStandardMaterial({ color: 0xd9dde2, roughness: 0.6, metalness: 0.2 }));
+    pad.position.set(p.x, 6, -p.y); pad.rotation.y = th; pad.castShadow = true; scene.add(pad);
+  }
+  // Carteles de frenada (300/200/100 m) antes de las frenadas fuertes, según el perfil de velocidad
+  {
+    const V = geo.v, n = L.n, signs = [];
+    for (let i = 0; i < n; i++) {
+      const v = V[i];
+      if (!(v <= V[(i - 1 + n) % n] && v < V[(i + 1) % n])) continue;
+      let j = i, peak = v;
+      for (let s = 0; s < n && L.s[i] - L.s[j] + (j > i ? L.length : 0) < 600; s++) { j = (j - 1 + n) % n; if (V[j] > peak) peak = V[j]; else if (V[j] < peak - 1) break; }
+      if (peak - v < 22) continue;
+      let bs = (L.s[j] + L.length) % L.length;
+      if (signs.some(x => Math.abs(pitRel(x - bs)) < 400)) continue;
+      signs.push(bs);
+    }
+    const tex = { 300: signTex('300'), 200: signTex('200'), 100: signTex('100') }, post = new THREE.MeshStandardMaterial({ color: 0x9aa0a8 });
+    for (const bs of signs.slice(0, 14)) for (const [m, off2] of [[300, -200], [200, -100], [100, 0]]) {
+      const d = bs + off2, i = segIndex(C, ((d % C.length) + C.length) % C.length);
+      const side = C.k[i] > 0 ? -1 : 1, lat = side * ((side > 0 ? C.wl[i] : C.wr[i]) + RUNOFF - 1);
+      const p = pointOn(C, d, lat), th = Math.atan2(p.ty, p.tx);
+      const g = new THREE.Group();
+      const panel = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 1.2), new THREE.MeshStandardMaterial({ map: tex[m], side: THREE.DoubleSide }));
+      panel.position.y = 1.6; panel.rotation.y = -Math.PI / 2;
+      const pole = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.1, 0.08), post); pole.position.y = 0.55;
+      g.add(panel, pole); g.position.set(p.x, 0, -p.y); g.rotation.y = th; scene.add(g);
+    }
   }
   // Salida: línea a cuadros, pórtico con semáforo y parrilla
   const p0 = pointOn(C, 0), th0 = Math.atan2(p0.ty, p0.tx);
@@ -245,8 +352,8 @@ export function createView3D(container, { geo, cars, onFollow }) {
   const half = w0 / 2 + 2;
   for (const z of [half, -half]) { const post = new THREE.Mesh(new THREE.BoxGeometry(0.4, 7, 0.4), gm); post.position.set(0, 3.5, z); gantry.add(post); }
   const beam = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.9, w0 + 4), gm); beam.position.set(0, 6.8, 0); gantry.add(beam);
-  const lightMat = new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff1010, emissiveIntensity: 0 });
-  for (let k = 0; k < 5; k++) { const b = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), lightMat); b.position.set(-0.32, 6.8, (k - 2) * 0.7); gantry.add(b); }
+  const lightMats = [];
+  for (let k = 0; k < 5; k++) { const lm = new THREE.MeshStandardMaterial({ color: 0x220000, emissive: 0xff1010, emissiveIntensity: 0 }); lightMats.push(lm); const b = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), lm); b.position.set(-0.32, 6.8, (k - 2) * 0.7); gantry.add(b); }
   gantry.position.set(mid.x, 0, -mid.y); gantry.rotation.y = th0; scene.add(gantry);
   {
     const marks = [];
@@ -260,7 +367,7 @@ export function createView3D(container, { geo, cars, onFollow }) {
   // Tribunas a lo largo de la recta de meta
   {
     const standMat = [new THREE.MeshStandardMaterial({ color: 0x5c626b, roughness: 0.8 }), new THREE.MeshStandardMaterial({ map: T.crowd, roughness: 0.9 })];
-    for (const [d, side] of [[-140, 1], [-30, 1], [80, 1], [-90, -1], [30, -1]]) {
+    for (const [d, side] of [[-200, 1], [-120, 1], [-40, 1], [40, 1], [120, 1]]) {
       const dd = (d + C.length) % C.length, i = segIndex(C, dd);
       const lat = side * ((side > 0 ? C.wl[i] : C.wr[i]) + RUNOFF + BARRIER_GAP + 10);
       const p = pointOn(C, dd, lat), th = Math.atan2(p.ty, p.tx);
@@ -343,7 +450,7 @@ export function createView3D(container, { geo, cars, onFollow }) {
     if (!drag) return;
     const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
     if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
-    if (drag.moved) { if (mode !== 'free') mode = 'free'; orbit.yaw -= dx * 0.006; orbit.pitch = Math.min(1.45, Math.max(0.05, orbit.pitch + dy * 0.005)); drag.x = e.clientX; drag.y = e.clientY; }
+    if (drag.moved) { if (mode !== 'free') { mode = 'free'; onCamera && onCamera('free'); } orbit.yaw -= dx * 0.006; orbit.pitch = Math.min(1.45, Math.max(0.05, orbit.pitch + dy * 0.005)); drag.x = e.clientX; drag.y = e.clientY; }
   });
   canvas.addEventListener('pointerup', e => {
     if (drag && !drag.moved) {
@@ -359,7 +466,7 @@ export function createView3D(container, { geo, cars, onFollow }) {
     }
     drag = null;
   });
-  canvas.addEventListener('wheel', e => { e.preventDefault(); if (mode !== 'free') mode = 'free'; orbit.dist = Math.min(400, Math.max(6, orbit.dist * (e.deltaY > 0 ? 1.12 : 0.89))); }, { passive: false });
+  canvas.addEventListener('wheel', e => { if (mode !== 'free' && !e.ctrlKey) return; e.preventDefault(); if (mode !== 'free') { mode = 'free'; onCamera && onCamera('free'); } orbit.dist = Math.min(400, Math.max(6, orbit.dist * (e.deltaY > 0 ? 1.12 : 0.89))); }, { passive: false });
 
   function resize() {
     const w = container.clientWidth || 640, h = container.clientHeight || 360;
@@ -398,10 +505,32 @@ export function createView3D(container, { geo, cars, onFollow }) {
       const moved = ((dist - u.dist) % L.length + L.length) % L.length;
       u.spin += (moved < 200 ? moved : 0) / 0.36;
       u.dist = dist;
-      const p = pointOn(L, dist, u.lat);
+      let p = pointOn(L, dist, u.lat);
+      // Mantiene el coche dentro del asfalto aunque la trazada vaya pegada al borde y se abra para adelantar
+      if (!c.out && L !== C) {
+        let ci = Math.round(dist / L.length * C.n) % C.n, best = Infinity;
+        for (let k = -18; k <= 18; k++) { const j = (ci + k + C.n) % C.n, dd = (C.x[j] - p.x) ** 2 + (C.y[j] - p.y) ** 2; if (dd < best) { best = dd; ci = j; } }
+        const nx = -C.ty[ci], ny = C.tx[ci], lat = (p.x - C.x[ci]) * nx + (p.y - C.y[ci]) * ny;
+        const lim = Math.max(lat - (C.wl[ci] - 1.3), 0) + Math.min(lat + (C.wr[ci] - 1.3), 0);
+        if (lim) p = { ...p, x: p.x - nx * lim, y: p.y - ny * lim };
+      }
+      const mix = (q, b) => { if (b <= 0) return; const tx = p.tx + (q.tx - p.tx) * b, ty = p.ty + (q.ty - p.ty) * b, l = Math.hypot(tx, ty) || 1; p = { x: p.x + (q.x - p.x) * b, y: p.y + (q.y - p.y) * b, tx: tx / l, ty: ty / l }; };
+      // Parrilla: casillas pintadas sobre la línea central
+      if (c.grid) { const k = c.grid.k; mix(pointOn(C, C.length - 10 - k * 8, (k % 2 ? -2.6 : 2.6) + (C.wl[0] - C.wr[0]) / 2), 1 - c.grid.blend); }
+      // Calle de boxes: entrada, parada en el garaje del equipo y salida
+      if (c.pit) {
+        const slot = slotOf[c.teamId] ?? 0;
+        const r = c.pit.phase === 'in' ? PIT_IN + c.pit.t * (slot - PIT_IN) : c.pit.phase === 'stop' ? slot : slot + c.pit.t * (PIT_OUT - slot);
+        const bl = c.pit.phase === 'in' ? Math.min(1, c.pit.t * -PIT_IN / 110) : c.pit.phase === 'out' ? Math.min(1, (1 - c.pit.t) * PIT_OUT / 110) : 1;
+        const d = (r + C.length) % C.length, i = segIndex(C, d);
+        mix(pointOn(C, d, -(wallLat(i) + (c.pit.phase === 'stop' ? 8.2 : 3.2))), bl * bl * (3 - 2 * bl));
+      }
       u.pos.set(p.x, 0.02, -p.y); u.fwd.set(p.tx, 0, -p.ty);
       u.group.position.copy(u.pos); u.group.rotation.y = Math.atan2(p.ty, p.tx);
-      for (const w of u.wheels) w.rotation.z = -u.spin;
+      const steer = Math.max(-0.38, Math.min(0.38, (geo.lineK[segIndex(L, dist)] || 0) * 9));
+      u.steer = (u.steer || 0) + (steer - (u.steer || 0)) * Math.min(1, dt * 8);
+      u.wheels.forEach((w, k) => { w.rotation.z = -u.spin; if (k < 2) w.rotation.y = c.pit && c.pit.phase === 'stop' ? 0 : u.steer; });
+      u.kmh = c.kmh || 0;
       if (state.compColors && c.comp) u.stripe.color.set(state.compColors[c.comp] || '#fff');
       u.rain.material.emissiveIntensity = (state.wet > 0.15 || state.sc) ? (Math.sin(elapsed * 12) > 0 ? 3 : 0.2) : 0;
       u.spray.material.opacity = c.out ? 0 : Math.min(0.75, (state.wet || 0) * 0.9);
@@ -415,13 +544,13 @@ export function createView3D(container, { geo, cars, onFollow }) {
       const p = pointOn(L, leader.dist + 55, 0); sc.group.position.set(p.x, 0.02, -p.y); sc.group.rotation.y = Math.atan2(p.ty, p.tx);
       sc.bar.material.emissiveIntensity = Math.sin(elapsed * 10) > 0 ? 3 : 0.4;
     }
-    lightMat.emissiveIntensity = state.lights ? 3 : 0;
+    lightMats.forEach((m, k) => { m.emissiveIntensity = k < (state.lights || 0) ? 3.5 : 0; });
 
     // Cámara
     const u = units.get(follow) || units.values().next().value;
     const tgt = u.pos, fwd = u.fwd, up = new THREE.Vector3(0, 1, 0), side = new THREE.Vector3().crossVectors(fwd, up);
     let desired, look, fov = 60, smooth = 1 - Math.exp(-dt * 5);
-    if (mode === 'chase') { desired = tgt.clone().addScaledVector(fwd, -9.5).setY(3.1); look = tgt.clone().addScaledVector(fwd, 6).setY(0.9); }
+    if (mode === 'chase') { desired = tgt.clone().addScaledVector(fwd, -9.5).setY(3.1); look = tgt.clone().addScaledVector(fwd, 6).setY(0.9); fov = 56 + Math.max(0, Math.min(12, ((u.kmh || 0) - 120) / 18)); }
     else if (mode === 'onboard') { desired = tgt.clone().addScaledVector(fwd, -0.35).setY(1.28); look = tgt.clone().addScaledVector(fwd, 25).setY(0.9); fov = 72; smooth = 1; }
     else if (mode === 'heli') { desired = tgt.clone().addScaledVector(fwd, -45).addScaledVector(side, 25).setY(60); look = tgt.clone(); fov = 45; smooth = 1 - Math.exp(-dt * 2); }
     else if (mode === 'tv') {
@@ -454,6 +583,16 @@ export function createView3D(container, { geo, cars, onFollow }) {
       rainLines.position.set(camera.position.x, 0, camera.position.z);
     }
 
+    // Oculta los coches pegados a la cámara para que no tapen la imagen
+    {
+      const toT = tgt.clone().sub(camera.position), dT = toT.length();
+      for (const [id, un] of units) {
+        if (id === follow) { un.group.visible = true; continue; }
+        const v = un.pos.clone().sub(camera.position), d = v.length();
+        const blocks = mode !== 'heli' && d < dT - 0.5 && v.angleTo(toT) < 0.42;
+        un.group.visible = d > 5.5 && !blocks;
+      }
+    }
     renderer.render(scene, camera);
 
     // Etiquetas proyectadas

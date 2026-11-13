@@ -3,7 +3,7 @@
 
 const SAVE_KEY = 'paddockplus_save_v1';
 const SAVE_VERSION = 2;
-const COST_CAP = 60; // M€ por temporada en I+D, fábrica y entrenamiento
+const COST_CAP = 75; // M€ por temporada en I+D, fábrica y entrenamiento
 const PILLARS = { aero: 'Aerodinámica', power: 'Unidad de potencia', chassis: 'Chasis', rel: 'Fiabilidad' };
 const RD_SIZES = {
   small:  { label: 'Pequeño', cost: 4,  races: 1, min: 0.6, max: 1.4 },
@@ -172,7 +172,7 @@ function applySession(s, results, kind) {
 function finishSprint(s, results) {
   applySession(s, results, 'sprint');
   const myPts = results.filter(r => r.teamId === s.teamId).reduce((a, r) => a + r.pts, 0);
-  if (myPts) ledger(s, `Premio por puntos en el sprint (${myPts} pts)`, myPts * 0.08);
+  if (myPts) ledger(s, `Premio por puntos en el sprint (${myPts} pts)`, myPts * 0.03);
   s.weekend.stage = 'qualy';
   save(s);
 }
@@ -210,12 +210,12 @@ function finishRace(s, results, wet) {
   const myPts = results.filter(r => r.teamId === s.teamId).reduce((a, r) => a + r.pts, 0);
   const salaries = teamDrivers(s, s.teamId).reduce((a, d) => a + d.salary, 0) / s.calendar.length;
   const staffSal = Object.values(s.staff).reduce((a, x) => a + x.salary, 0) / s.calendar.length;
-  ledger(s, `Costes operativos (${c.name})`, -2.2);
+  ledger(s, `Costes operativos (${c.name})`, -(1.1 + me.budget * 0.007));
   ledger(s, 'Salarios de pilotos', -salaries);
   ledger(s, 'Salarios del personal técnico', -staffSal);
   if (s.sponsor) ledger(s, `Patrocinio: ${s.sponsor.name}`, s.sponsor.perRace);
-  ledger(s, 'Ingresos comerciales', 1 + me.budget * 0.012);
-  if (myPts) ledger(s, `Premio por puntos (${myPts} pts)`, myPts * 0.12);
+  ledger(s, 'Ingresos comerciales', 1.4 + me.budget * 0.008);
+  if (myPts) ledger(s, `Premio por puntos (${myPts} pts)`, myPts * 0.035);
   const myBest = results.find(r => r.teamId === s.teamId);
   if (myBest && myBest.pos === 1 && !myBest.out) addNews(s, `🏆 ¡Victoria para ${driver(s, myBest.id).name} en el ${c.name}!`);
   else if (myBest && myBest.pos <= 3 && !myBest.out) addNews(s, `🍾 Podio para ${driver(s, myBest.id).name} en el ${c.name}.`);
@@ -346,7 +346,7 @@ function endSeason(s) {
   const myPos = ts.findIndex(t => t.id === s.teamId) + 1;
   s.history.push({ season: s.season, driver: champ.name, driverTeam: team(s, champ.teamId)?.name || '—', team: champTeam.name, myPos, myPts: myTeam(s).points });
 
-  ledger(s, `Premio de constructores (${ordinal(myPos)})`, Math.max(8, 70 - (myPos - 1) * 6));
+  ledger(s, `Premio de constructores (${ordinal(myPos)})`, Math.max(12, 50 - (myPos - 1) * 4));
   if (s.sponsor && s.sponsor.bonus && myPos <= s.sponsor.target) ledger(s, `Bonus de ${s.sponsor.name} (objetivo cumplido)`, s.sponsor.bonus);
   const verdict = myPos <= boardTarget(s) ? 'El consejo está satisfecho con la temporada.' : 'El consejo esperaba más. Mejora el próximo año.';
   addNews(s, `🏁 Fin de temporada ${s.season}: ${champ.name} campeón; ${champTeam.name} gana el título de constructores. Tu equipo: ${ordinal(myPos)}. ${verdict}`);
@@ -462,7 +462,7 @@ function startSeason(s) {
   if (teamDrivers(s, s.teamId).length < 2) return 'Necesitas dos pilotos titulares para empezar la temporada.';
   if (!s.sponsor) return 'Elige un patrocinador principal antes de empezar.';
   aiFillSeats(s);
-  ledger(s, 'Asignación de presupuesto de temporada', myTeam(s).budget * 0.35);
+  ledger(s, 'Asignación de presupuesto de temporada', myTeam(s).budget * 0.3);
   s.phase = 'season';
   addNews(s, `🚦 Arranca la temporada ${s.season}. Objetivo del consejo: ${ordinal(boardTarget(s))} o mejor.`);
   save(s); return null;

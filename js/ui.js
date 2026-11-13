@@ -57,6 +57,7 @@ function renderChrome() {
   const status = document.getElementById('status');
   if (!S) { tabs.innerHTML = ''; status.innerHTML = ''; return; }
   const me = myTeam(S);
+  document.documentElement.style.setProperty('--team', me.color);
   const items = [['hq', 'Cuartel general'], ['weekend', S.phase === 'season' ? '🏁 Fin de semana' : 'Temporada'], ['standings', 'Clasificación'], ['calendar', 'Calendario'], ['car', 'Coche e I+D'], ['drivers', 'Pilotos'], ['staff', 'Personal'], ['finance', 'Finanzas'], ['history', 'Historial'], ['settings', 'Partida']];
   tabs.innerHTML = items.map(([k, l]) => `<button class="${view === k ? 'active' : ''}" data-go="${k}">${l}</button>`).join('');
   const round = S.phase === 'season' ? `Ronda ${S.round + 1}/${S.calendar.length}` : S.phase === 'offseason' ? 'Pretemporada' : 'Fin de temporada';
@@ -364,6 +365,7 @@ function startLive(kind, quick) {
     ? new RaceSim(S, { kind, grid: wk.qualy.grid, setups: wk.setups, weather: wk.weather, plans })
     : new RaceSim(S, { kind, grid: wk.sprintGrid, setups: wk.setups, weather: wk.sprintWeather, laps: Math.ceil(c.laps / 3) });
   live = { sim, kind, prev: sim.snap, next: sim.snap, t0: 0, f: 1, speed: 1, paused: false, raf: 0, done: false };
+  recordHist();
   if (quick) { sim.runToEnd(); live.prev = live.next = sim.snap; live.done = true; }
   render();
 }
@@ -371,22 +373,39 @@ function startLive(kind, quick) {
 function liveView() {
   const L = live, sim = L.sim, c = sim.c;
   if (L.done) return resultsView();
-  return `<div class="live">
-    <div class="card livebar"><div id="liveHead" class="row spread"></div></div>
-    <div class="livegrid">
-      <div class="card trackcard">
-        <div class="row spread viewbar"><div class="seg" role="group" aria-label="Vista"><button class="${pref3d ? '' : 'on'}" data-act="view2d">2D</button><button class="${pref3d ? 'on' : ''}" data-act="view3d">3D</button></div>
-          ${pref3d ? `<div class="seg" role="group" aria-label="Cámara">${Object.entries(CAMS).map(([k, l]) => `<button data-act="cam" data-m="${k}" class="${(L.cam || 'chase') === k ? 'on' : ''}">${l}</button>`).join('')}</div>` : ''}
-          <span class="small muted">${hasRealTrack(c) ? '📍 ' + esc(getTrackGeometry(c).label) : 'Trazado generado'}</span></div>
-        ${pref3d ? '<div id="v3d" class="v3d"><div class="v3d-loading">Cargando la vista 3D…</div><div id="v3dHud" class="v3d-hud"></div></div>' : ''}
-        <div class="${pref3d ? 'minimap' : ''}">${trackSVG(c, { id: 'livetrk', cars: sim.cars.map(x => `<g id="car-${x.id}" class="car ${x.mine ? 'mine' : ''}"><circle r="${x.mine ? 6 : 4.5}" fill="${team(S, x.teamId).color}"/>${x.mine ? `<text y="-9">${abbr(x.d.name)}</text>` : ''}</g>`).join('') })}</div>
-        ${pref3d ? '<p class="small muted v3d-tip">Arrastra para girar la cámara, usa la rueda para acercar y toca un coche (o su fila en la tabla) para seguirlo.</p>' : ''}</div>
-      <div class="card"><div id="tower" class="tower"></div></div>
-    </div>
-    <div class="grid" style="margin-top:14px">
+  const svgCars = sim.cars.map(x => `<g id="car-${x.id}" class="car ${x.mine ? 'mine' : ''}"><circle r="${x.mine ? 6 : 4.5}" fill="${team(S, x.teamId).color}"/>${x.mine ? `<text y="-9">${abbr(x.d.name)}</text>` : ''}</g>`).join('');
+  const where = `<span class="small muted trackname">${hasRealTrack(c) ? '📍 ' + esc(getTrackGeometry(c).label) : 'Trazado generado'}</span>`;
+  const viewSeg = `<div class="seg" role="group" aria-label="Vista"><button class="${pref3d ? '' : 'on'}" data-act="view2d">2D</button><button class="${pref3d ? 'on' : ''}" data-act="view3d">3D</button></div>`;
+  const feed = `<div class="grid live-lower">
       <div id="myCars" class="mycars"></div>
       <div class="card"><h3>Directo</h3><div id="feed" class="feed"></div></div>
-    </div></div>`;
+    </div>`;
+  if (pref3d) {
+    // Retransmisión: marcador, clasificación, minimapa y piloto seguido superpuestos a la imagen 3D
+    return `<div class="live">
+      <div class="broadcast">
+        <div id="v3d" class="v3d">
+          <div class="v3d-loading">Cargando la vista 3D…</div>
+          <div class="ov ov-head" id="liveHead"></div>
+          <div class="ov ov-tower"><div id="tower" class="tower tv" role="list" aria-label="Clasificación en carrera"></div></div>
+          <div class="ov ov-map">${trackSVG(c, { id: 'livetrk', cars: svgCars })}</div>
+          <div id="v3dHud" class="v3d-hud"></div>
+        </div>
+        <div class="bc-controls">
+          <div class="bc-group">${viewSeg}<div class="seg seg-scroll" role="group" aria-label="Cámara">${Object.entries(CAMS).map(([k, l]) => `<button data-act="cam" data-m="${k}" class="${(L.cam || 'chase') === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+          <div class="bc-group" id="liveCtl"></div>
+        </div>
+        <p class="small muted v3d-tip">Arrastra para girar la cámara, usa la rueda (en cámara libre) para acercar y toca un coche o su fila para seguirlo. ${where}</p>
+      </div>
+      ${feed}</div>`;
+  }
+  return `<div class="live">
+    <div class="card livebar"><div class="row spread"><div id="liveHead" class="row"></div><div id="liveCtl" class="row"></div></div></div>
+    <div class="livegrid">
+      <div class="card trackcard"><div class="row spread viewbar">${viewSeg}${where}</div>${trackSVG(c, { id: 'livetrk', cars: svgCars })}</div>
+      <div class="card"><div id="tower" class="tower" role="list" aria-label="Clasificación en carrera"></div></div>
+    </div>
+    ${feed}</div>`;
 }
 
 function liveHUD() {
@@ -394,16 +413,18 @@ function liveHUD() {
   const sim = L.sim, snap = sim.snap, w = sim.wet, ref = sim.c.base;
   const head = document.getElementById('liveHead');
   if (!head) return;
-  const flag = sim.sc ? `<span class="flag yellow">${sim.sc.type === 'SC' ? 'SAFETY CAR' : 'VSC'}</span>` : sim.finished ? '<span class="flag chk">🏁 FINAL</span>' : '<span class="flag green">BANDERA VERDE</span>';
-  head.innerHTML = `<div class="row"><b>${esc(sim.c.name)}${sim.kind === 'sprint' ? ' · Sprint' : ''}</b><span class="lapbig">Vuelta ${Math.min(sim.lap, sim.totalLaps)}/${sim.totalLaps}</span>${flag}<span title="${wxText(w)}">${wxIcon(w)} ${wxText(w)}</span></div>
-    <div class="row">${L.paused ? '<button class="btn sm" data-act="lvPause">▶ Seguir</button>' : '<button class="btn sm ghost" data-act="lvPause">⏸ Pausa</button>'}
-      ${(is3D() ? SPEEDS_3D : SPEEDS_2D).map(x => `<button class="btn sm ${(is3D() ? (L.speed3 || 1) : L.speed) === x ? '' : 'ghost'}" data-act="lvSpeed" data-x="${x}" title="${is3D() ? (x === 1 ? 'Tiempo real' : x + ' veces más rápido que en la realidad') : ''}">${x}×</button>`).join('')}
-      <button class="btn sm ghost" data-act="lvSkip">⏭ Al final</button></div>`;
+  const flag = sim.sc ? `<span class="flag yellow">${sim.sc.type === 'SC' ? 'SAFETY CAR' : 'VSC'}</span>` : sim.finished ? '<span class="flag chk">🏁 FINAL</span>' : sim.lap === 0 ? '<span class="flag flag-grid">PARRILLA</span>' : '<span class="flag green">VERDE</span>';
+  head.innerHTML = `<b class="racename">${esc(sim.c.name)}${sim.kind === 'sprint' ? ' · Sprint' : ''}</b><span class="lapbig">V ${Math.min(sim.lap, sim.totalLaps)}<small>/${sim.totalLaps}</small></span>${flag}<span class="wx" title="${wxText(w)}">${wxIcon(w)} ${wxText(w)}</span>`;
+  const ctl = document.getElementById('liveCtl');
+  if (ctl) ctl.innerHTML = `${L.paused ? '<button class="btn sm" data-act="lvPause">▶ Seguir</button>' : '<button class="btn sm ghost" data-act="lvPause">⏸ Pausa</button>'}
+      <div class="seg" role="group" aria-label="Velocidad">${(is3D() ? SPEEDS_3D : SPEEDS_2D).map(x => `<button class="${(is3D() ? (L.speed3 || 1) : L.speed) === x ? 'on' : ''}" data-act="lvSpeed" data-x="${x}" title="${is3D() ? (x === 1 ? 'Tiempo real' : x + ' veces más rápido que en la realidad') : ''}">${x}×</button>`).join('')}</div>
+      <button class="btn sm ghost" data-act="lvSkip">⏭ Al final</button>`;
 
+  const foll = L.v3d ? L.v3d.getFollow() : null;
   document.getElementById('tower').innerHTML = snap.cars.map((x, i) => {
     const car = sim.byId[x.id];
-    const gap = x.out ? '<span class="bad">OUT</span>' : i === 0 ? 'Líder' : x.gap > ref ? '+' + Math.floor(x.gap / ref) + ' V' : '+' + x.gap.toFixed(1);
-    return `<div class="r ${car.mine ? 'mine' : ''} ${x.out ? 'out' : ''} ${pref3d && L.v3d && L.v3d.getFollow() === x.id ? 'foll' : ''}" data-act="follow" data-id="${x.id}"><b>${i + 1}</b><span class="nm">${teamChip(team(S, car.teamId))}${esc(abbr(car.d.name))} <span class="small muted hide-sm">${esc(car.d.name)}</span></span>${x.out ? '<span></span>' : tyre(x.comp)}<span class="num small">${x.pitted ? '<span class="badge">BOX</span>' : gap}</span></div>`;
+    const gap = x.out ? '<span class="bad">OUT</span>' : i === 0 ? (sim.lap === 0 ? '' : 'Líder') : x.gap > ref ? '+' + Math.floor(x.gap / ref) + ' V' : '+' + x.gap.toFixed(1);
+    return `<div class="r ${car.mine ? 'mine' : ''} ${x.out ? 'out' : ''} ${foll === x.id ? 'foll' : ''}" role="listitem button" tabindex="0" data-act="follow" data-id="${x.id}" style="--tc:${team(S, car.teamId).color}" aria-label="${i + 1}º ${esc(car.d.name)}"><b class="pos">${i + 1}</b><span class="nm"><i class="tbar"></i>${esc(abbr(car.d.name))} <span class="small muted hide-sm full">${esc(car.d.name)}</span></span>${x.out ? '<span></span>' : tyre(x.comp)}<span class="num small gap">${x.pitted ? '<span class="badge">BOX</span>' : gap}</span></div>`;
   }).join('');
 
   const mine = sim.cars.filter(x => x.mine);
@@ -414,11 +435,11 @@ function liveHUD() {
     const next = x.plan[0];
     if (x.out) return `<div class="card mycar out"><b>${esc(x.d.name)}</b><p class="bad">Abandono en la vuelta ${x.outLap}: ${esc(x.reason.toLowerCase())}.</p></div>`;
     return `<div class="card mycar" style="--c:${team(S, x.teamId).color}">
-      <div class="row spread"><b>P${i + 1} · ${esc(x.d.name)}</b><span class="small muted">↑ ${gA} s · ↓ ${gB} s</span></div>
+      <div class="row spread"><b class="mc-name">P${i + 1} · ${esc(x.d.name)}</b><span class="small muted">↑ ${gA} s · ↓ ${gB} s</span></div>
       <div class="row small" style="margin:6px 0">${tyre(x.compound)} <span>${x.age} v.</span><div class="bar wear" style="flex:1"><i style="width:${Math.min(100, x.wear)}%;background:${x.wear > 85 ? 'var(--bad)' : x.wear > 60 ? 'var(--warn)' : 'var(--good)'}"></i></div><span>${Math.round(x.wear)}%</span></div>
       <div class="row small muted">${x.box ? `<span class="warn">🔧 Entrará en boxes: ${COMPOUNDS[x.box].name}</span> <button class="btn sm ghost" data-act="lvCancel" data-id="${x.id}">Cancelar</button>` : next ? `Parada prevista: V${next.lap} → ${COMPOUNDS[next.compound].name}` : 'Sin más paradas previstas'}</div>
       <div class="seg" role="group" aria-label="Ritmo">${Object.entries(MODES).map(([k, m]) => `<button class="${x.mode === k ? 'on' : ''}" data-act="lvMode" data-id="${x.id}" data-m="${k}">${m.label}</button>`).join('')}</div>
-      <div class="row small" style="margin-top:8px"><span>Boxes:</span>${Object.keys(COMPOUNDS).map(k => `<button class="tyrebtn" data-act="lvBox" data-id="${x.id}" data-c="${k}" title="Parar a por ${COMPOUNDS[k].name.toLowerCase()}">${tyre(k)}</button>`).join('')}
+      <div class="row small" style="margin-top:8px"><span>Boxes:</span>${Object.keys(COMPOUNDS).map(k => `<button class="tyrebtn" data-act="lvBox" data-id="${x.id}" data-c="${k}" title="Parar a por ${COMPOUNDS[k].name.toLowerCase()}" aria-label="Parar a por ${COMPOUNDS[k].name.toLowerCase()}">${tyre(k)}</button>`).join('')}
         <label class="auto"><input type="checkbox" data-auto="${x.id}" ${x.auto ? 'checked' : ''}> IA de estrategia</label></div>
     </div>`;
   }).join('') + (mine.filter(x => !x.out).length === 2 ? `<button class="btn sm ghost" data-act="lvOrder">📻 Orden de equipo: intercambiar posiciones</button>` : '');
@@ -426,20 +447,51 @@ function liveHUD() {
   document.getElementById('feed').innerHTML = [...sim.events].reverse().slice(0, 60).map(e => `<div class="${e.type} ${e.mine ? 'mineev' : ''}"><span class="badge">V${e.lap}</span> ${esc(e.text)}</div>`).join('');
 }
 
+// Posición física de cada coche a partir de sus propios tiempos de paso por meta (no de la diferencia con el líder).
+// En la vuelta en que para, conduce hasta la línea, se queda en su garaje el tiempo de la parada y sale.
+function recordHist() {
+  const L = live, sim = L.sim;
+  L.hist = L.hist || Object.fromEntries(sim.cars.map(x => [x.id, { t: [x.grid === 1 ? 0 : x.t], pit: [false], loss: [0] }]));
+  L.T = L.T || [0];
+  if (sim.lap === 0) return;
+  for (const x of sim.cars) {
+    if (x.out) continue;
+    const h = L.hist[x.id];
+    if (h.t.length > sim.lap) continue;
+    h.t.push(x.t); h.pit.push(!!x.pitted); h.loss.push(x.pitted ? x.pitLoss || 0 : 0);
+  }
+  const lead = sim.byId[sim.order[0]];
+  L.T.push(lead && !lead.out ? lead.t : Math.min(...sim.cars.filter(x => !x.out).map(x => x.t)));
+}
+function liveStep() { const L = live; L.prev = L.sim.snap; L.sim.step(); L.next = L.sim.snap; recordHist(); }
+function animTime(f) { const T = live.T || [0], k = T.length - 1; return k === 0 ? 0 : T[k - 1] + (T[k] - T[k - 1]) * f; }
+function physProg(id, Tm) {
+  const h = live.hist && live.hist[id];
+  if (!h || Tm <= h.t[0]) return { p: 0, frac: 0, n: 1, grid: true };
+  let n = 1;
+  while (n < h.t.length && h.t[n] < Tm) n++;
+  if (n >= h.t.length) return { p: h.t.length - 1, frac: 1, n: h.t.length - 1, stale: true };
+  const start = h.t[n - 1], loss = h.pit[n] ? h.loss[n] : 0, drive = Math.max(1, h.t[n] - start - loss);
+  const frac = (Tm - start) / drive;
+  if (frac >= 1) return { p: n, frac: 1, n, stop: true, pitLap: true };
+  return { p: n - 1 + frac, frac, n, pitLap: h.pit[n], afterPit: h.pit[n - 1] };
+}
+function carProgs(f) {
+  const Tm = animTime(f);
+  return live.next.cars.map(x => ({ x, ph: x.out ? null : physProg(x.id, Tm) }));
+}
+
 function drawCars(f) {
   const path = document.getElementById('livetrk');
   if (!path || !live) return;
   const len = path.getTotalLength();
-  const prev = Object.fromEntries(live.prev.cars.map(x => [x.id, x]));
-  for (const x of live.next.cars) {
+  const geo = getTrackGeometry(live.sim.c), real = hasRealTrack(live.sim.c);
+  for (const { x, ph } of carProgs(f)) {
     const g = document.getElementById('car-' + x.id);
     if (!g) continue;
-    if (x.out) { g.style.display = 'none'; continue; }
-    const p0 = prev[x.id] && prev[x.id].prog !== null ? prev[x.id].prog : x.prog;
-    const p = p0 + (x.prog - p0) * f;
-    const frac = (((p % 1) + 1) % 1);
-    const geo = getTrackGeometry(live.sim.c);
-    const pt = path.getPointAtLength(hasRealTrack(live.sim.c) ? geo.fracToDist(frac) / geo.line.length * len : frac * len);
+    if (x.out || !ph) { g.style.display = 'none'; continue; }
+    const frac = (((ph.p % 1) + 1) % 1);
+    const pt = path.getPointAtLength(real ? geo.fracToDist(frac) / geo.line.length * len : frac * len);
     g.setAttribute('transform', `translate(${pt.x.toFixed(1)},${pt.y.toFixed(1)})`);
   }
 }
@@ -449,19 +501,19 @@ function liveLoop(now) {
   if (!L || view !== 'weekend' || L.done) return;
   const dur = lapDur();
   if (!L.paused) {
-    if (!L.t0) L.t0 = now - dur + (pref3d && L.sim.lap === 0 ? 4000 : 0); // en 3D, unos segundos de parrilla con el semáforo encendido
+    if (!L.t0) L.t0 = now - dur + (pref3d && L.sim.lap === 0 ? GRID_HOLD : 0); // en 3D, unos segundos de parrilla con el semáforo
     L.f = (now - L.t0) / dur;
     if (L.f >= 1) {
       if (L.sim.finished) { L.done = true; end3D(); render(); return; }
-      L.prev = L.sim.snap; L.sim.step(); L.next = L.sim.snap; L.t0 = now; L.f = 0;
+      liveStep(); L.t0 = now; L.f = 0;
       liveHUD();
     }
   }
-  drawCars(Math.min(1, L.f));
+  drawCars(Math.min(1, Math.max(0, L.f)));
   if (L.v3d && pref3d && document.getElementById('v3d')) {
     const dt = L.lastNow ? (now - L.lastNow) / 1000 : 0.016;
-    L.v3d.frame(state3D(Math.min(1, L.f)), dt);
-    if (now - (L.hudT || 0) > 120) { L.hudT = now; hud3D(); }
+    L.v3d.frame(state3D(Math.min(1, Math.max(0, L.f)), now), dt);
+    if (now - (L.hudT || 0) > 120) { L.hudT = now; hud3D(now); }
   }
   L.lastNow = now;
   L.raf = requestAnimationFrame(liveLoop);
@@ -470,14 +522,20 @@ function liveLoop(now) {
 // ---------- vista 3D ----------
 // En 2D una vuelta dura 1,5 s a 1×; en 3D la escala es de tiempo real (1× = la vuelta dura lo que duraría de verdad)
 const SPEEDS_2D = [1, 2, 4, 8], SPEEDS_3D = [1, 4, 16, 60];
+const GRID_HOLD = 4500;
 function is3D() { return pref3d && !!live; }
 function lapDur() {
   if (!live) return 1500;
   if (is3D()) return getTrackGeometry(live.sim.c).lapTime * 1000 / (live.speed3 || 1);
   return 1500 / live.speed;
 }
-function retime(fn) { const f = live.f; fn(); live.t0 = performance.now() - f * lapDur(); }
-function set3D(on) { if (live) { const f = live.f; pref3d = on; live.t0 = performance.now() - f * lapDur(); } pref3d = on; try { localStorage.setItem('pp_view3d', on ? '1' : '0'); } catch (e) { /* sin almacenamiento */ } render(); }
+function retime(fn) { const f = Math.max(0, live.f); fn(); live.t0 = performance.now() - f * lapDur(); }
+function set3D(on) {
+  if (live && live.t0) { const f = Math.max(0, live.f); pref3d = on; live.t0 = performance.now() - f * lapDur(); }
+  pref3d = on;
+  try { localStorage.setItem('pp_view3d', on ? '1' : '0'); } catch (e) { /* sin almacenamiento */ }
+  render();
+}
 async function mount3D() {
   const L = live, el = document.getElementById('v3d');
   if (!L || !el) return;
@@ -492,14 +550,15 @@ async function mount3D() {
     if (!target) return;
     L.v3d = V3D.createView3D(target, {
       geo: getTrackGeometry(L.sim.c),
-      cars: L.sim.cars.map(x => ({ id: x.id, color: team(S, x.teamId).color, mine: x.mine, label: abbr(x.d.name) })),
-      onFollow: () => liveHUD(),
+      cars: L.sim.cars.map(x => ({ id: x.id, teamId: x.teamId, color: team(S, x.teamId).color, mine: x.mine, label: abbr(x.d.name) })),
+      onFollow: () => { liveHUD(); hud3D(performance.now()); },
+      onCamera: m => { L.cam = m; document.querySelectorAll('[data-act="cam"]').forEach(b => b.classList.toggle('on', b.dataset.m === m)); },
     });
     L.v3d.setCamera(L.cam || 'chase');
-    { const f = L.f; L.t0 = performance.now() - f * lapDur(); }
+    if (L.t0) { const f = Math.max(0, L.f); L.t0 = performance.now() - f * lapDur(); }
     liveHUD();
     target.querySelector('.v3d-loading')?.remove();
-    if (L.paused || !L.raf) { L.v3d.frame(state3D(Math.min(1, L.f)), 0.016); }
+    L.v3d.frame(state3D(Math.min(1, Math.max(0, L.f)), performance.now()), 0.016);
   } catch (err) {
     console.warn(err);
     toast('No se pudo iniciar la vista 3D en este dispositivo. Se muestra la vista 2D.');
@@ -515,40 +574,58 @@ function liveSpeedKmh(geo, dist) {
   if (sim.sc) v *= sim.sc.type === 'SC' ? 0.5 : 0.6;
   return v * (1 - 0.18 * sim.wet);
 }
-function state3D(f) {
+const smooth01 = t => { t = Math.max(0, Math.min(1, t)); return t * t * (3 - 2 * t); };
+function state3D(f, now = performance.now()) {
   const L = live, sim = L.sim, geo = getTrackGeometry(sim.c), len = geo.line.length;
-  const prev = Object.fromEntries(L.prev.cars.map(x => [x.id, x]));
-  const list = L.next.cars.map(x => {
+  const list = carProgs(f).map(({ x, ph }) => {
     const car = sim.byId[x.id];
-    const p0 = prev[x.id] && prev[x.id].prog !== null ? prev[x.id].prog : x.prog;
-    const p = x.prog === null ? null : p0 + (x.prog - p0) * f;
-    const D = p === null ? null : Math.floor(p) * len + geo.fracToDist(((p % 1) + 1) % 1);
-    return { id: x.id, D, dist: D === null ? 0 : ((D % len) + len) % len, out: x.out, comp: x.comp, pos: x.pos, pitted: x.pitted, label: abbr(car.d.name), mine: car.mine, lat: 0 };
+    const D = ph ? Math.floor(ph.p) * len + geo.fracToDist(((ph.p % 1) + 1) % 1) : null;
+    const c = { id: x.id, teamId: car.teamId, D, dist: D === null ? 0 : ((D % len) + len) % len, out: x.out, comp: x.comp, pos: x.pos, pitted: x.pitted, label: abbr(car.d.name), mine: car.mine, lat: 0, kmh: 0 };
+    if (ph && !ph.grid) {
+      const toLine = ph.n * len - D, fromLine = D - (ph.n - 1) * len;
+      if (ph.stop) c.pit = { phase: 'stop', t: 0 };
+      else if (ph.pitLap && toLine < -PIT_IN) c.pit = { phase: 'in', t: 1 - toLine / -PIT_IN };
+      else if (ph.afterPit && fromLine < PIT_OUT) c.pit = { phase: 'out', t: fromLine / PIT_OUT };
+      c.kmh = c.pit ? (c.pit.phase === 'stop' ? 0 : 80) : liveSpeedKmh(geo, c.dist);
+    }
+    if (ph && ph.grid) c.grid = { k: car.grid - 1, blend: 0 };
+    else if (ph && ph.n === 1 && ph.frac < 0.12) c.grid = { k: car.grid - 1, blend: smooth01(ph.frac / 0.12) };
+    return c;
   });
   // Separación lateral cuando dos coches van pegados (adelantamientos y rebufo)
   L.sides = L.sides || {};
-  const act = list.filter(c => !c.out).sort((a, b) => b.D - a.D);
-  act.forEach((c, i) => {
-    const a = act[i - 1];
-    if (a && a.D - c.D < 11) { c.lat = a.lat > 0.1 ? -2.7 : a.lat < -0.1 ? 2.7 : (L.sides[c.id] = L.sides[c.id] || (Math.random() < 0.5 ? 2.7 : -2.7)); }
-    else if (sim.lap === 0) c.lat = (c.pos % 2 ? 1 : -1) * 2.4;
-  });
-  return { cars: list, wet: sim.wet, sc: sim.sc ? sim.sc.type : null, lights: sim.lap === 0, compColors: Object.fromEntries(Object.entries(COMPOUNDS).map(([k, v]) => [k, v.color])) };
+  const act = list.filter(c => !c.out && !c.pit && c.D !== null).sort((a, b) => b.D - a.D);
+  // Tres carriles: cada coche busca uno libre respecto a los que lleva justo delante y lo mantiene si puede
+  const LANES = [0, 2.9, -2.9], placed = [];
+  for (const c of act) {
+    const near = placed.filter(o => o.D - c.D < 8.5);
+    let lane = 0;
+    if (near.length) {
+      const prefs = [L.sides[c.id] ?? 0, 0, 2.9, -2.9];
+      lane = prefs.find(l => near.every(o => Math.abs(o.lat - l) >= 2.4));
+      if (lane === undefined) lane = LANES.reduce((best, l) => Math.min(...near.map(o => Math.abs(o.lat - l))) > Math.min(...near.map(o => Math.abs(o.lat - best))) ? l : best, 0);
+    } else if (placed.some(o => o.D - c.D < 16) && L.sides[c.id]) lane = L.sides[c.id]; // aún en rebufo: mantiene su carril
+    c.lat = lane; L.sides[c.id] = lane; placed.push(c);
+  }
+  // Semáforo: se encienden las cinco luces una a una y se apagan en la salida
+  let lights = 0;
+  if (sim.lap === 0 && L.t0) { const left = L.t0 + lapDur() - now; lights = Math.max(0, Math.min(5, Math.ceil((GRID_HOLD - 600 - left) / 700))); }
+  return { cars: list, wet: sim.wet, sc: sim.sc ? sim.sc.type : null, lights, compColors: Object.fromEntries(Object.entries(COMPOUNDS).map(([k, v]) => [k, v.color])) };
 }
-function hud3D() {
+function hud3D(now = performance.now()) {
   const L = live, el = document.getElementById('v3dHud');
   if (!L || !L.v3d || !el) return;
   const id = L.v3d.getFollow(), car = L.sim.byId[id];
   if (!car) return;
-  const st = state3D(Math.min(1, L.f)).cars.find(c => c.id === id);
-  const geo = getTrackGeometry(L.sim.c);
-  const still = car.out || L.next.lap === 0;
-  const kmh = still ? 0 : Math.round(liveSpeedKmh(geo, st.dist));
+  const st = state3D(Math.min(1, Math.max(0, L.f)), now).cars.find(c => c.id === id);
+  const still = car.out || L.sim.lap === 0 || (st.pit && st.pit.phase === 'stop');
+  const kmh = still ? 0 : Math.round(st.kmh);
   const gear = still ? 'N' : GEARS.filter(g => kmh >= g).length;
   const i = L.sim.order.indexOf(id), ahead = i > 0 ? L.sim.byId[L.sim.order[i - 1]] : null;
-  el.innerHTML = `<div class="hud-name">${teamChip(team(S, car.teamId))}<b>P${i + 1}</b> ${esc(car.d.name)}</div>
+  const status = car.out ? '<span class="hud-tag bad">Abandono</span>' : st.pit ? `<span class="hud-tag">${st.pit.phase === 'stop' ? 'Parada en boxes' : 'Calle de boxes · 80 km/h'}</span>` : '';
+  el.innerHTML = `<div class="hud-name"><i class="tbar" style="--tc:${team(S, car.teamId).color}"></i><b>P${i + 1}</b> ${esc(car.d.name)}</div>
     <div class="hud-main"><span class="hud-speed">${kmh}</span><span class="small">km/h</span><span class="hud-gear">${gear}</span></div>
-    <div class="hud-row">${tyre(car.compound)} <span>${Math.round(car.wear)}% desgaste</span>${ahead && !car.out ? `<span>↑ ${(car.t - ahead.t).toFixed(1)} s</span>` : ''}</div>`;
+    <div class="hud-row">${tyre(car.compound)} <span>${Math.round(car.wear)}%</span>${ahead && !car.out ? `<span>↑ ${(car.t - ahead.t).toFixed(1)} s</span>` : ''}${status}</div>`;
 }
 
 function resultsView() {
@@ -703,6 +780,7 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.teampick')) { e.preventDefault(); ACTIONS.pickTeam(e.target); }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.tower .r')) { e.preventDefault(); ACTIONS.follow(e.target); }
 });
 document.addEventListener('input', e => {
   const t = e.target;
