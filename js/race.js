@@ -126,6 +126,7 @@ class RaceSim {
     this.totalLaps = laps || this.c.laps;
     this.weather = weather;
     this.lap = 0; this.events = []; this.sc = null; this.finished = false; this.scUsed = 0;
+    this.stats = { ovt: 0, attempts: 0, repass: 0 };
     const w0 = weather.w[0];
     this.cars = grid.map((id, i) => {
       const d = driver(s, id);
@@ -204,6 +205,24 @@ class RaceSim {
       return;
     }
     if (rem <= 2) return;
+    // Contexto en pista: coche de delante y de detrás al empezar la vuelta
+    const i = this.order.indexOf(x.id);
+    const ahead = i > 0 ? this.byId[this.order[i - 1]] : null, behind = this.byId[this.order[i + 1]];
+    const gapA = ahead && !ahead.out ? x.t - ahead.t : 99, gapB = behind && !behind.out ? behind.t - x.t : 99;
+    // Ritmo: ahorra si los neumáticos no llegan a la parada prevista; ataca si tiene ritmo para pasar o en el final
+    const perLap = 100 / COMPOUNDS[x.compound].life * this.c.wear;
+    const lifeLeft = (100 - x.wear) / perLap, toStop = next ? next.lap - lap : rem;
+    if (lifeLeft < toStop - 1 && toStop < rem) x.mode = 'save';
+    else if (gapA < 1.0 && ahead && (x.lastClean ?? 99) < (ahead.lastClean ?? 0) - 0.05) x.mode = 'push';
+    else if (rem <= 5 && (gapA < 1.6 || gapB < 1.0)) x.mode = 'push';
+    else x.mode = lifeLeft < toStop + 2 && toStop < rem ? 'save' : 'norm';
+    // Undercut si lleva varias vueltas atascado, o responde si el de detrás acaba de parar
+    if (next && w < 0.15 && !this.sc) {
+      x.stuck = gapA < 1.2 ? (x.stuck || 0) + 1 : 0;
+      const soon = next.lap - lap;
+      if (x.stuck >= 3 && soon > 0 && soon <= 7) { x.box = next.compound; x.plan.shift(); x.stuck = 0; return; }
+      if (behind && behind.pitted && gapB < 2.5 && soon > 0 && soon <= 8) { x.box = next.compound; x.plan.shift(); return; }
+    }
     // SC/VSC: parada barata
     if (this.sc && next && lap >= next.lap - 8 && w < 0.15) { x.box = next.compound; x.plan.shift(); return; }
     // Cambio de condiciones
@@ -227,6 +246,9 @@ class RaceSim {
     for (const x of this.active()) this.decide(x, lap);
 
     const lt = {};
+    // Diferencia con el coche de delante al empezar la vuelta (aire sucio y alcance de DRS)
+    const gap0 = {};
+    { let prev = null; for (const x of this.active()) { gap0[x.id] = prev ? x.t - prev.t : 99; x.t0 = x.t; prev = x; } }
     for (const x of this.active()) {
       const m = MODES[x.mode], comp = COMPOUNDS[x.compound];
       x.pitted = false;
@@ -236,8 +258,12 @@ class RaceSim {
       x.age++; x.wear += rate;
       const p = effectivePerf(this.s, x.d, c, w, x.setup);
       const ageEq = x.wear / 100 * comp.life;
-      let t = c.base - (p - 70) * 0.058 + comp.pace + comp.deg * ageEq + Math.max(0, x.wear - 100) * 0.05
-        + m.pace + weatherPenalty(x.compound, w) + w * 6 - lap * 0.025 + gauss(0.15 + (100 - x.d.cons) * 0.01) * (1 + w);
+      const clean = c.base - (p - 70) * 0.058 + comp.pace + comp.deg * ageEq + Math.max(0, x.wear - 100) * 0.05
+        + m.pace + weatherPenalty(x.compound, w) + w * 6 - lap * 0.025;
+      x.clean = clean;
+      let t = clean + gauss(0.12 + (100 - x.d.cons) * 0.008) * (1 + w);
+      // Aire sucio: seguir de cerca cuesta tiempo en las curvas, menos en circuitos fáciles para adelantar
+      if (gap0[x.id] < 1.0 && lap > 1) t += 0.18 * (1 - c.ovt);
       if (lap === 1) t += 1.5 + gauss((1.1 - x.d.craft / 100) * 1.5);
       if (sc && sc.type === 'VSC') t = c.base * 1.4 + gauss(0.05);
       if (sc && sc.type === 'SC') t = c.base * 1.5;
@@ -259,7 +285,7 @@ class RaceSim {
         x.compound = x.box; x.box = null; x.age = 0; x.wear = 0; x.pits++; x.pitted = true;
         if (!x.used.includes(x.compound)) x.used.push(x.compound);
       }
-      x.last = t;
+      x.last = t; x.lastClean = clean;
       if (!x.pitted && !sc && lap > 1) x.best = Math.min(x.best, t);
       lt[x.id] = t;
 
@@ -276,6 +302,7 @@ class RaceSim {
     if (!this.sc && this.scUsed < 2 && lap > 1 && lap < this.totalLaps - 3 && Math.random() < c.sc * 0.3 / this.totalLaps) this.deploy(lap, Math.random() < 0.5 ? 'SC' : 'VSC', 'restos en la pista');
 
     // Posiciones y adelantamientos
+    for (const x of this.cars) if (x.lostTo && lap - (x.lostLap || 0) > 2) x.lostTo = null;
     const act = this.order.filter(id => !this.byId[id].out && lt[id] !== undefined);
     const newOrder = [];
     for (const id of act) {
@@ -288,14 +315,30 @@ class RaceSim {
         const free = (ahead.pitted && !x.pitted) || ahead.t - x.t > 1.5;
         let ok = free;
         if (!ok && !sc) {
-          const pr = clamp(0.15 + c.ovt * 0.45 + (ahead.t - x.t) * 0.4 + (x.d.craft - ahead.d.craft) / 60 + (x.mode === 'push' ? 0.08 : 0) - (ahead.mode === 'push' ? 0.05 : 0), 0.04, 0.92);
-          ok = Math.random() < pr;
+          // Ventaja de ritmo real (sin el ruido de la vuelta), DRS según el circuito, pericia y modo de ritmo
+          const adv = (ahead.clean ?? 0) - (x.clean ?? 0);
+          const inRange = (x.t0 - ahead.t0) < 1.0;
+          // Cada circuito exige una ventaja mínima de ritmo para poder pasar (Monza ≈0,25 s/vuelta, Mónaco >2 s)
+          const need = 0.2 + (1 - c.ovt) ** 2 * 2.1;
+          let pr = 0.01 + c.ovt * 0.06 + (adv - need) * 0.45 + (x.d.craft - ahead.d.craft) / 150 + (x.mode === 'push' ? 0.05 : 0) - (ahead.mode === 'push' ? 0.04 : 0);
+          if (!inRange) pr -= 0.15;
+          if (x.lostTo === ahead.id && adv < 0.3) pr *= 0.25; // devolver el adelantamiento justo después es difícil
+          ok = Math.random() < clamp(pr, 0.005, 0.8);
+          // Toque en el intento
+          if (Math.random() < 0.01 * MODES[x.mode].risk * (1 + 2 * w)) {
+            const l1 = rand(1.5, 5), l2 = rand(1.5, 5); x.t += l1; ahead.t += l2;
+            this.log(lap, 'warn', `💢 Toque entre ${x.d.name} y ${ahead.d.name}.`, x.mine || ahead.mine);
+            if (x.t >= ahead.t) { x.t = Math.max(x.t, ahead.t + 0.3); break; }
+          }
         }
+        if (!free && !sc) this.stats.attempts++;
         if (ok) {
           pos--;
+          if (!free) { this.stats.ovt++; if (x.lostTo === ahead.id || ahead.id === x.passedBy) this.stats.repass++; }
+          if (!free) { ahead.t += 0.08 + Math.random() * 0.15; ahead.lostTo = x.id; ahead.lostLap = lap; }
           if (!free && (x.mine || ahead.mine)) this.log(lap, x.mine ? 'gain' : 'loss', `${x.mine ? '⬆️' : '⬇️'} ${x.d.name} adelanta a ${ahead.d.name} por la ${ordinal(pos + 1)} posición.`, true);
           if (pos === 0 && !free) this.log(lap, 'lead', `🏁 ${x.d.name} toma el liderato.`);
-        } else { x.t = ahead.t + 0.3 + Math.random() * 0.2; break; }
+        } else { x.t = ahead.t + 0.25 + Math.random() * 0.25; if (!sc) ahead.t += Math.random() * 0.06; break; }
       }
       newOrder.splice(pos, 0, id);
       // Los coches que acaba de adelantar quedan detrás también en el tiempo (si luego se atascó tras otro coche)
@@ -304,6 +347,8 @@ class RaceSim {
         if (behind.t <= front.t) behind.t = front.t + 0.15 + Math.random() * 0.1; else break;
       }
     }
+    // Garantiza que el orden y los tiempos coinciden (la defensa y los toques pueden alterar tiempos ya asignados)
+    for (let k = 1; k < newOrder.length; k++) { const b = this.byId[newOrder[k]], f = this.byId[newOrder[k - 1]]; if (b.t <= f.t) b.t = f.t + 0.12; }
     if (this.sc && this.sc.type === 'SC') {
       const lead = this.byId[newOrder[0]].t;
       newOrder.forEach((id, i) => { this.byId[id].t = lead + i * 0.6; });

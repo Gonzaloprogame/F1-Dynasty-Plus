@@ -512,7 +512,8 @@ function liveLoop(now) {
   drawCars(Math.min(1, Math.max(0, L.f)));
   if (L.v3d && pref3d && document.getElementById('v3d')) {
     const dt = L.lastNow ? (now - L.lastNow) / 1000 : 0.016;
-    L.v3d.frame(state3D(Math.min(1, Math.max(0, L.f)), now), dt);
+    L.last3D = applyRacecraft(state3D(Math.min(1, Math.max(0, L.f)), now));
+    L.v3d.frame(L.last3D, dt);
     if (now - (L.hudT || 0) > 120) { L.hudT = now; hud3D(now); }
   }
   L.lastNow = now;
@@ -558,7 +559,8 @@ async function mount3D() {
     if (L.t0) { const f = Math.max(0, L.f); L.t0 = performance.now() - f * lapDur(); }
     liveHUD();
     target.querySelector('.v3d-loading')?.remove();
-    L.v3d.frame(state3D(Math.min(1, Math.max(0, L.f)), performance.now()), 0.016);
+    L.last3D = applyRacecraft(state3D(Math.min(1, Math.max(0, L.f)), performance.now()));
+    L.v3d.frame(L.last3D, 0.016);
   } catch (err) {
     console.warn(err);
     toast('No se pudo iniciar la vista 3D en este dispositivo. Se muestra la vista 2D.');
@@ -592,36 +594,80 @@ function state3D(f, now = performance.now()) {
     else if (ph && ph.n === 1 && ph.frac < 0.12) c.grid = { k: car.grid - 1, blend: smooth01(ph.frac / 0.12) };
     return c;
   });
-  // Separación lateral cuando dos coches van pegados (adelantamientos y rebufo)
-  L.sides = L.sides || {};
-  const act = list.filter(c => !c.out && !c.pit && c.D !== null).sort((a, b) => b.D - a.D);
-  // Tres carriles: cada coche busca uno libre respecto a los que lleva justo delante y lo mantiene si puede
-  const LANES = [0, 2.9, -2.9], placed = [];
-  for (const c of act) {
-    const near = placed.filter(o => o.D - c.D < 8.5);
-    let lane = 0;
-    if (near.length) {
-      const prefs = [L.sides[c.id] ?? 0, 0, 2.9, -2.9];
-      lane = prefs.find(l => near.every(o => Math.abs(o.lat - l) >= 2.4));
-      if (lane === undefined) lane = LANES.reduce((best, l) => Math.min(...near.map(o => Math.abs(o.lat - l))) > Math.min(...near.map(o => Math.abs(o.lat - best))) ? l : best, 0);
-    } else if (placed.some(o => o.D - c.D < 16) && L.sides[c.id]) lane = L.sides[c.id]; // aún en rebufo: mantiene su carril
-    c.lat = lane; L.sides[c.id] = lane; placed.push(c);
-  }
   // Semáforo: se encienden las cinco luces una a una y se apagan en la salida
   let lights = 0;
   if (sim.lap === 0 && L.t0) { const left = L.t0 + lapDur() - now; lights = Math.max(0, Math.min(5, Math.ceil((GRID_HOLD - 600 - left) / 700))); }
   return { cars: list, wet: sim.wet, sc: sim.sc ? sim.sc.type : null, lights, compColors: Object.fromEntries(Object.entries(COMPOUNDS).map(([k, v]) => [k, v.color])) };
+}
+// Comportamiento en pista para la vista 3D: los coches hacen fila y solo adelantan en las frenadas fuertes
+// (nunca con coche de seguridad); el adelantamiento se completa en paralelo, sin saltos.
+const FOLLOW_GAP = 7.5;
+function applyRacecraft(st) {
+  const L = live, sim = L.sim, geo = getTrackGeometry(sim.c), len = geo.line.length;
+  L.vis = L.vis || {};
+  const cars = st.cars.filter(c => !c.out && c.D !== null);
+  cars.sort((a, b) => (L.vis[b.id] ? L.vis[b.id].D : b.D) - (L.vis[a.id] ? L.vis[a.id].D : a.D));
+  let prev = null;
+  for (const c of cars) {
+    c.raw = c.D;
+    const V = L.vis[c.id] || (L.vis[c.id] = { D: c.D, raw: c.D, prevD: c.D });
+    V.prevD = V.D;
+    const free = c.grid || c.pit;
+    const rawAdv = Math.max(0, c.D - V.raw);
+    let target = free ? c.D : Math.min(c.D, V.D + rawAdv * 1.35 + 0.02);
+    if (!free && target < V.D) target = V.D;
+    if (prev && !free && !prev.grid && !prev.pit && prev.Dv - target < len / 2) {
+      const limit = prev.Dv - FOLLOW_GAP;
+      if (target > limit) {
+        const wantsPass = c.raw > prev.raw + 0.5;
+        const alongside = V.passing === prev.id && wantsPass;
+        if (alongside || (wantsPass && !sim.sc && geo.inZone(target))) V.passing = prev.id;
+        else {
+          const prevAdv = Math.max(0, prev.Dv - (L.vis[prev.id].prevD ?? prev.Dv));
+          target = Math.min(target, Math.max(limit, V.D + prevAdv * 0.97));
+          V.passing = null;
+        }
+      }
+    }
+    if (V.passing && prev && target > prev.Dv + 1) V.passing = null; // adelantamiento completado
+    V.D = target; V.raw = c.D;
+    c.Dv = target; c.D = target; c.dist = ((target % len) + len) % len;
+    prev = c;
+  }
+  // Carriles por posición física en la pista (incluye coches doblados): cada coche busca un carril libre
+  L.sides = L.sides || {};
+  const onTrack = cars.filter(c => !c.pit && !c.grid);
+  if (onTrack.length) {
+    const ds = onTrack.map(c => c.dist).sort((a, b) => a - b);
+    let cut = 0, gapMax = -1;
+    ds.forEach((d, i) => { const g = i === 0 ? ds[0] + len - ds[ds.length - 1] : d - ds[i - 1]; if (g > gapMax) { gapMax = g; cut = d - g / 2; } });
+    const rel = c => ((c.dist - cut) % len + len) % len;
+    onTrack.sort((a, b) => rel(b) - rel(a));
+    const LANES = [0, 2.9, -2.9], placed = [];
+    for (const c of onTrack) {
+      const near = placed.filter(o => rel(o) - rel(c) < 8.5);
+      let lane = 0;
+      if (near.length) {
+        const prefs = [L.sides[c.id] ?? 0, 0, 2.9, -2.9];
+        lane = prefs.find(l => near.every(o => Math.abs(o.lat - l) >= 2.4));
+        if (lane === undefined) lane = LANES.reduce((best, l) => Math.min(...near.map(o => Math.abs(o.lat - l))) > Math.min(...near.map(o => Math.abs(o.lat - best))) ? l : best, 0);
+      } else if (L.sides[c.id] && placed.some(o => rel(o) - rel(c) < 18)) lane = L.sides[c.id];
+      c.lat = lane; L.sides[c.id] = lane; placed.push(c);
+    }
+  }
+  return st;
 }
 function hud3D(now = performance.now()) {
   const L = live, el = document.getElementById('v3dHud');
   if (!L || !L.v3d || !el) return;
   const id = L.v3d.getFollow(), car = L.sim.byId[id];
   if (!car) return;
-  const st = state3D(Math.min(1, Math.max(0, L.f)), now).cars.find(c => c.id === id);
+  const st = (L.last3D || applyRacecraft(state3D(Math.min(1, Math.max(0, L.f)), now))).cars.find(c => c.id === id);
+  if (!st) return;
   const still = car.out || L.sim.lap === 0 || (st.pit && st.pit.phase === 'stop');
   const kmh = still ? 0 : Math.round(st.kmh);
   const gear = still ? 'N' : GEARS.filter(g => kmh >= g).length;
-  const i = L.sim.order.indexOf(id), ahead = i > 0 ? L.sim.byId[L.sim.order[i - 1]] : null;
+  const i = (st.pos || L.sim.order.indexOf(id) + 1) - 1, ahead = L.sim.order.indexOf(id) > 0 ? L.sim.byId[L.sim.order[L.sim.order.indexOf(id) - 1]] : null;
   const status = car.out ? '<span class="hud-tag bad">Abandono</span>' : st.pit ? `<span class="hud-tag">${st.pit.phase === 'stop' ? 'Parada en boxes' : 'Calle de boxes · 80 km/h'}</span>` : '';
   el.innerHTML = `<div class="hud-name"><i class="tbar" style="--tc:${team(S, car.teamId).color}"></i><b>P${i + 1}</b> ${esc(car.d.name)}</div>
     <div class="hud-main"><span class="hud-speed">${kmh}</span><span class="small">km/h</span><span class="hud-gear">${gear}</span></div>
