@@ -515,7 +515,7 @@ export function createView3D(container, { geo, cars, onFollow, onCamera }) {
     let a = 0, b = 0;
     for (let t = 0; t < N * 8 && (a + b) < N * 1.2; t++) {
       const x = minX - 450 + rnd() * (maxX - minX + 900), y = minY - 450 + rnd() * (maxY - minY + 900);
-      if (clearAll(x, y) < 28) continue;
+      if (clearAll(x, y) < 40) continue;
       const k = 0.75 + rnd() * 0.7; s.set(k, k * (0.85 + rnd() * 0.4), k); q.setFromAxisAngle(up, rnd() * 6.28);
       m.compose(new THREE.Vector3(x, 0, -y), q, s);
       if (rnd() < 0.5 && a < N) { conifer.setMatrixAt(a, m); conifer.setColorAt(a++, col.setHSL(0.3 + rnd() * 0.05, 0.45, 0.22 + rnd() * 0.08)); }
@@ -607,7 +607,7 @@ export function createView3D(container, { geo, cars, onFollow, onCamera }) {
       const si = side > 0 ? 0 : 1, lat = side * ((side > 0 ? wl(i) : wr(i)) + KERB_W + runW(si, i) + 6);
       const p = pointOn(C, d, lat);
       if (clearOther(p.x, p.y, C.s[i], 160) < 4 || (side < 0 && inPit(i))) continue;
-      tvSpots.push(new THREE.Vector3(p.x, H(C, i) + 9 + (k % 3) * 3, -p.y)); break;
+      tvSpots.push(new THREE.Vector3(p.x, H(C, i) + 14 + (k % 3) * 3, -p.y)); break;
     }
   }
 
@@ -732,12 +732,12 @@ export function createView3D(container, { geo, cars, onFollow, onCamera }) {
     else if (mode === 'heli') { desired = tgt.clone().addScaledVector(fwd, -45).addScaledVector(side, 25).add(new THREE.Vector3(0, 60, 0)); look = tgt.clone(); fov = 45; smooth = 1 - Math.exp(-dt * 2); }
     else if (mode === 'tv' && tvSpots.length) {
       // Prefiere cámaras hacia las que el coche se acerca (lo ve de frente o de lado, no alejándose)
-      const score = s => { const v = s.clone().sub(tgt), d = v.length(), ahead = v.setY(0).normalize().dot(fwd); return d * (ahead > -0.2 ? 1 : 2.5); };
+      const score = s => { const v = s.clone().sub(tgt), d = v.length(), ahead = v.setY(0).normalize().dot(fwd); return d * (ahead > -0.2 ? 1 : 2.5) * (d > 180 ? 3 : 1); };
       let bi = tvIdx >= 0 ? tvIdx : 0, bs = tvIdx >= 0 ? score(tvSpots[tvIdx]) * 0.8 : Infinity;
       tvSpots.forEach((s, i) => { const sc = score(s); if (sc < bs) { bs = sc; bi = i; } });
       const bd = tvSpots[bi].distanceTo(tgt);
-      if (bi !== tvIdx) { tvIdx = bi; camPos.copy(tvSpots[bi]); }
       desired = tvSpots[bi].clone(); look = tgt.clone().add(new THREE.Vector3(0, 0.7, 0));
+      if (bi !== tvIdx) { tvIdx = bi; camPos.copy(desired); camLook.copy(look); } // corte de realización: salto instantáneo
       fov = Math.min(50, Math.max(4, 2 * Math.atan(10 / Math.max(1, bd)) * 180 / Math.PI)); smooth = 1;
     } else {
       desired = tgt.clone().add(new THREE.Vector3(Math.cos(orbit.yaw) * Math.cos(orbit.pitch), Math.sin(orbit.pitch), Math.sin(orbit.yaw) * Math.cos(orbit.pitch)).multiplyScalar(orbit.dist));
